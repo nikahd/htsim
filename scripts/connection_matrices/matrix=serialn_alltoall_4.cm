@@ -1,0 +1,19 @@
+Nodes 128
+Connections 12
+Triggers 4
+9->92 id 1 start 0 size 2097152 send_done_trigger 1
+9->102 id 2 start 0 size 2097152 send_done_trigger 1
+9->76 id 3 trigger 1 size 2097152
+92->102 id 4 start 0 size 2097152 send_done_trigger 2
+92->76 id 5 start 0 size 2097152 send_done_trigger 2
+92->9 id 6 trigger 2 size 2097152
+102->76 id 7 start 0 size 2097152 send_done_trigger 3
+102->9 id 8 start 0 size 2097152 send_done_trigger 3
+102->92 id 9 trigger 3 size 2097152
+76->9 id 10 start 0 size 2097152 send_done_trigger 4
+76->92 id 11 start 0 size 2097152 send_done_trigger 4
+76->102 id 12 trigger 4 size 2097152
+trigger id 1 multishot
+trigger id 2 multishot
+trigger id 3 multishot
+trigger id 4 multishot

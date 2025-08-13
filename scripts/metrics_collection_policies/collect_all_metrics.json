@@ -1,0 +1,9 @@
+{
+    "data_dir": "/tmp/",
+    "filters": [
+        {
+            "regex": ".*",
+            "enabled": true
+        }
+    ]
+}

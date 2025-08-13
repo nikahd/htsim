@@ -1,0 +1,83 @@
+Nodes 128
+Connections 56
+Triggers 24
+9->92 id 1 start 0 size 2097152 send_done_trigger 1
+9->49 id 2 start 0 size 2097152 send_done_trigger 1
+9->102 id 3 trigger 1 size 2097152 send_done_trigger 2
+9->16 id 4 trigger 1 size 2097152 send_done_trigger 2
+9->76 id 5 trigger 2 size 2097152 send_done_trigger 3
+9->62 id 6 trigger 2 size 2097152 send_done_trigger 3
+9->103 id 7 trigger 3 size 2097152
+92->102 id 8 start 0 size 2097152 send_done_trigger 4
+92->16 id 9 start 0 size 2097152 send_done_trigger 4
+92->76 id 10 trigger 4 size 2097152 send_done_trigger 5
+92->62 id 11 trigger 4 size 2097152 send_done_trigger 5
+92->49 id 12 trigger 5 size 2097152 send_done_trigger 6
+92->103 id 13 trigger 5 size 2097152 send_done_trigger 6
+92->9 id 14 trigger 6 size 2097152
+102->76 id 15 start 0 size 2097152 send_done_trigger 7
+102->62 id 16 start 0 size 2097152 send_done_trigger 7
+102->49 id 17 trigger 7 size 2097152 send_done_trigger 8
+102->103 id 18 trigger 7 size 2097152 send_done_trigger 8
+102->16 id 19 trigger 8 size 2097152 send_done_trigger 9
+102->9 id 20 trigger 8 size 2097152 send_done_trigger 9
+102->92 id 21 trigger 9 size 2097152
+76->49 id 22 start 0 size 2097152 send_done_trigger 10
+76->103 id 23 start 0 size 2097152 send_done_trigger 10
+76->16 id 24 trigger 10 size 2097152 send_done_trigger 11
+76->9 id 25 trigger 10 size 2097152 send_done_trigger 11
+76->62 id 26 trigger 11 size 2097152 send_done_trigger 12
+76->92 id 27 trigger 11 size 2097152 send_done_trigger 12
+76->102 id 28 trigger 12 size 2097152
+49->16 id 29 start 0 size 2097152 send_done_trigger 13
+49->9 id 30 start 0 size 2097152 send_done_trigger 13
+49->62 id 31 trigger 13 size 2097152 send_done_trigger 14
+49->92 id 32 trigger 13 size 2097152 send_done_trigger 14
+49->103 id 33 trigger 14 size 2097152 send_done_trigger 15
+49->102 id 34 trigger 14 size 2097152 send_done_trigger 15
+49->76 id 35 trigger 15 size 2097152
+16->62 id 36 start 0 size 2097152 send_done_trigger 16
+16->92 id 37 start 0 size 2097152 send_done_trigger 16
+16->103 id 38 trigger 16 size 2097152 send_done_trigger 17
+16->102 id 39 trigger 16 size 2097152 send_done_trigger 17
+16->9 id 40 trigger 17 size 2097152 send_done_trigger 18
+16->76 id 41 trigger 17 size 2097152 send_done_trigger 18
+16->49 id 42 trigger 18 size 2097152
+62->103 id 43 start 0 size 2097152 send_done_trigger 19
+62->102 id 44 start 0 size 2097152 send_done_trigger 19
+62->9 id 45 trigger 19 size 2097152 send_done_trigger 20
+62->76 id 46 trigger 19 size 2097152 send_done_trigger 20
+62->92 id 47 trigger 20 size 2097152 send_done_trigger 21
+62->49 id 48 trigger 20 size 2097152 send_done_trigger 21
+62->16 id 49 trigger 21 size 2097152
+103->9 id 50 start 0 size 2097152 send_done_trigger 22
+103->76 id 51 start 0 size 2097152 send_done_trigger 22
+103->92 id 52 trigger 22 size 2097152 send_done_trigger 23
+103->49 id 53 trigger 22 size 2097152 send_done_trigger 23
+103->102 id 54 trigger 23 size 2097152 send_done_trigger 24
+103->16 id 55 trigger 23 size 2097152 send_done_trigger 24
+103->62 id 56 trigger 24 size 2097152
+trigger id 1 multishot
+trigger id 2 multishot
+trigger id 3 multishot
+trigger id 4 multishot
+trigger id 5 multishot
+trigger id 6 multishot
+trigger id 7 multishot
+trigger id 8 multishot
+trigger id 9 multishot
+trigger id 10 multishot
+trigger id 11 multishot
+trigger id 12 multishot
+trigger id 13 multishot
+trigger id 14 multishot
+trigger id 15 multishot
+trigger id 16 multishot
+trigger id 17 multishot
+trigger id 18 multishot
+trigger id 19 multishot
+trigger id 20 multishot
+trigger id 21 multishot
+trigger id 22 multishot
+trigger id 23 multishot
+trigger id 24 multishot

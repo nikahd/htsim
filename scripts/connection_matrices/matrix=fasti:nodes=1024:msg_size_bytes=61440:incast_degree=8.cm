@@ -1,0 +1,10 @@
+Nodes 1024
+Connections 8
+0->1023 id 1 start 0 size 61440
+1->1023 id 2 start 0 size 61440
+2->1023 id 3 start 0 size 61440
+3->1023 id 4 start 0 size 61440
+4->1023 id 5 start 0 size 61440
+5->1023 id 6 start 0 size 61440
+6->1023 id 7 start 0 size 61440
+7->1023 id 8 start 0 size 1679360

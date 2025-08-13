@@ -1,0 +1,34 @@
+Nodes 512
+Connections 32
+0->511 start 0 size 25000000
+0->511 start 0 size 25000000
+0->511 start 0 size 25000000
+0->511 start 0 size 25000000
+0->511 start 0 size 25000000
+0->511 start 0 size 25000000
+0->511 start 0 size 25000000
+0->511 start 0 size 25000000
+16->495 start 0 size 25000000
+16->495 start 0 size 25000000
+16->495 start 0 size 25000000
+16->495 start 0 size 25000000
+16->495 start 0 size 25000000
+16->495 start 0 size 25000000
+16->495 start 0 size 25000000
+16->495 start 0 size 25000000
+32->479 start 0 size 25000000
+32->479 start 0 size 25000000
+32->479 start 0 size 25000000
+32->479 start 0 size 25000000
+32->479 start 0 size 25000000
+32->479 start 0 size 25000000
+32->479 start 0 size 25000000
+32->479 start 0 size 25000000
+48->463 start 0 size 25000000
+48->463 start 0 size 25000000
+48->463 start 0 size 25000000
+48->463 start 0 size 25000000
+48->463 start 0 size 25000000
+48->463 start 0 size 25000000
+48->463 start 0 size 25000000
+48->463 start 0 size 25000000
