@@ -1,0 +1,6 @@
+Nodes 512
+Connections 4
+0->511 start 0 size 2000000000
+16->511 start 0 size 2000000000
+32->511 start 0 size 2000000000
+64->511 start 0 size 2000000000

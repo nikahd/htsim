@@ -1,0 +1,74 @@
+#!/bin/bash
+ 
+CONN_MATRICES=("one_one_1_200MB.cm" "one_one_2_200MB.cm" "one_one_4_200MB.cm" "one_one_8_200MB.cm" "one_one_16_200MB.cm" "one_one_32_200MB.cm" "one_one_64_200MB.cm" "one_one_128_200MB.cm" "one_one_256_200MB.cm")
+# CONN_MATRICES=("one_one_128_200MB.cm" "one_one_256_200MB.cm")
+IS_LINK_DOWN=(1)
+drop_rates=("mean")
+use_jitter=1
+
+INIT_CWND_RATIO=(0.7) # 70%, 80%, 90%
+RECOVERABLE_THRESHOLD=(1) # recoverable threshold
+bitmap_size_list=(256)
+fullskip=(0) 
+as_fast_recoverable=(0) # 0: no, 1: yes
+bitmap_full_percent=(0.9) 
+
+experiment_run=(1 2 3 4 5)
+
+folder_name="msft_ai_wan_kecbr"
+binary_name="$folder_name"
+
+mkdir -p "$folder_name"
+
+for MATRIX in "${CONN_MATRICES[@]}"; do
+    for exp in "${experiment_run[@]}"; do
+        for drop_rate in "${drop_rates[@]}"; do
+            for bitmapsize in "${bitmap_size_list[@]}"; do
+                for CWND_RATIO in "${INIT_CWND_RATIO[@]}"; do
+                    for as_fast_recoverable in "${as_fast_recoverable[@]}"; do
+                        for percent in "${bitmap_full_percent[@]}"; do
+                            for isfullskip in "${fullskip[@]}"; do
+                                for rec in "${RECOVERABLE_THRESHOLD[@]}"; do
+                                    for ((j=0; j<${#IS_LINK_DOWN[@]}; j++)); do
+                                        LINK_DOWN=${IS_LINK_DOWN[$j]}
+
+                                        CONN_MATRIX="./scripts/msft_ai_connection_matrices/${MATRIX}"
+                                        BASENAME=$(basename "$CONN_MATRIX")
+                                        SUFFIX="_linkdown${LINK_DOWN}_droprate${drop_rate}_usejitter${use_jitter}_initcwnd${CWND_RATIO}_bitmapsize${bitmapsize}_recoverable${rec}_isfullskip${isfullskip}_fastrecoverable${as_fast_recoverable}_bitmapfulllossy1_fullpercent${percent}_exp${exp}"
+                                        OUTFILE="$folder_name/output_${BASENAME%.*}${SUFFIX}.txt"
+                                        STATISTICS_FILENAME="$folder_name/statistics_${BASENAME%.*}${SUFFIX}.txt"
+
+                                        cmd="./build/${binary_name} -o uec_entry -switch_latency 0 -collect_data 1 -strat ecmp_host \
+-tm ${CONN_MATRIX} -noFi -noQaInter -noQaIntra -noRto \
+-drop-rate ${drop_rate} -use-jitter ${use_jitter} \
+-interQSize 4000000 -intraQSize 200000000 -is-link-down ${LINK_DOWN} \
+-init-cwnd ${CWND_RATIO} -recoverable-threshold ${rec} \
+-statistics-filename ${STATISTICS_FILENAME} \
+-use-full-skip ${isfullskip} -use-as-fast-as-possible-recoverable-skip ${as_fast_recoverable} -bitmap_full_percent ${percent}"
+
+                                        echo "Executing command:"
+                                        echo "$cmd"
+
+                                        echo "Statistics will be written to: $STATISTICS_FILENAME"
+                                        echo "----------------------------------------"
+
+                                        $cmd > /dev/null 2> "$OUTFILE" # only store errors
+                                        # $cmd > "$OUTFILE"
+
+                                        if [ $? -ne 0 ]; then
+                                            echo "Command timed out or failed"
+                                        else
+                                            echo "Command completed successfully"
+                                        fi
+                                        echo "----------------------------------------"
+                                    done
+                                done
+                            done
+                        done
+                    done
+                done
+            done
+        done
+    done
+done
+

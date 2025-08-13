@@ -1,0 +1,24 @@
+# Test 2-tier FatTree that is supposed to match	the default auto-generated topology
+Nodes 1024
+Tiers 2
+Podsize 1024
+
+Tier 0
+Oversubscribed 8
+Downlink_speed_Gbps 100
+Radix_Down 32
+Radix_Up 4
+Downlink_Latency_ns 1000
+Switch_Latency_ns 0
+
+Tier 1
+Oversubscribed 1
+Downlink_speed_Gbps 100
+Asymmetric_speed_Gbps 50
+Asymmetric_mode all
+Asymmetric_number_of_switches 8
+Radix_Down 32
+Downlink_Latency_ns 1000
+Switch_Latency_ns 0
+Bundle 1
+
