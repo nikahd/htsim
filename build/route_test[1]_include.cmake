@@ -1,0 +1,5 @@
+if(EXISTS "/Users/nikahd/projects/msft-htsim/build/route_test[1]_tests.cmake")
+  include("/Users/nikahd/projects/msft-htsim/build/route_test[1]_tests.cmake")
+else()
+  add_test(route_test_NOT_BUILT route_test_NOT_BUILT)
+endif()

@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/nikahd/projects/msft-htsim/build/_deps/googletest-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

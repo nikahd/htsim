@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/callback_pipe_test.dir/core/callback_pipe_test.cpp.o -o callback_pipe_test  libhtsim.a lib/libgtest_main.a lib/libgmock_main.a _deps/spdlog-build/libspdlog.a lib/libgmock.a lib/libgtest.a

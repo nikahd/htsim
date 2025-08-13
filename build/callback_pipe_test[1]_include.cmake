@@ -1,0 +1,5 @@
+if(EXISTS "/Users/nikahd/projects/msft-htsim/build/callback_pipe_test[1]_tests.cmake")
+  include("/Users/nikahd/projects/msft-htsim/build/callback_pipe_test[1]_tests.cmake")
+else()
+  add_test(callback_pipe_test_NOT_BUILT callback_pipe_test_NOT_BUILT)
+endif()

@@ -1,0 +1,5 @@
+if(EXISTS "/Users/nikahd/projects/msft-htsim/build/shared_queue_test[1]_tests.cmake")
+  include("/Users/nikahd/projects/msft-htsim/build/shared_queue_test[1]_tests.cmake")
+else()
+  add_test(shared_queue_test_NOT_BUILT shared_queue_test_NOT_BUILT)
+endif()

@@ -1,0 +1,5 @@
+if(EXISTS "/Users/nikahd/projects/msft-htsim/build/pipe_test[1]_tests.cmake")
+  include("/Users/nikahd/projects/msft-htsim/build/pipe_test[1]_tests.cmake")
+else()
+  add_test(pipe_test_NOT_BUILT pipe_test_NOT_BUILT)
+endif()

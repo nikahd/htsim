@@ -1,0 +1,5 @@
+if(EXISTS "/Users/nikahd/projects/msft-htsim/build/metric_test[1]_tests.cmake")
+  include("/Users/nikahd/projects/msft-htsim/build/metric_test[1]_tests.cmake")
+else()
+  add_test(metric_test_NOT_BUILT metric_test_NOT_BUILT)
+endif()

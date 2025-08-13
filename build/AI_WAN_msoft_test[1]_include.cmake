@@ -1,0 +1,5 @@
+if(EXISTS "/Users/nikahd/projects/msft-htsim/build/AI_WAN_msoft_test[1]_tests.cmake")
+  include("/Users/nikahd/projects/msft-htsim/build/AI_WAN_msoft_test[1]_tests.cmake")
+else()
+  add_test(AI_WAN_msoft_test_NOT_BUILT AI_WAN_msoft_test_NOT_BUILT)
+endif()

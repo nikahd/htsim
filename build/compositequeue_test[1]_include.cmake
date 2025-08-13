@@ -1,0 +1,5 @@
+if(EXISTS "/Users/nikahd/projects/msft-htsim/build/compositequeue_test[1]_tests.cmake")
+  include("/Users/nikahd/projects/msft-htsim/build/compositequeue_test[1]_tests.cmake")
+else()
+  add_test(compositequeue_test_NOT_BUILT compositequeue_test_NOT_BUILT)
+endif()
