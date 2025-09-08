@@ -1,196 +1,214 @@
 #!/usr/bin/env python3
-import re, sys, csv, os
-from collections import defaultdict
+# -*- coding: utf-8 -*-
 
-# ---------- helpers ----------
+import csv
+import sys
+import re
+from collections import defaultdict, OrderedDict
 
-def clean_path(p: str) -> str:
-    """Normalize a path string: drop queue()/pipe() decorations and compress whitespace."""
-    # remove queue(...) and pipe(...) fragments
-    p = re.sub(r'\bqueue\([^)]*\)\s*', '', p, flags=re.IGNORECASE)
-    p = re.sub(r'\bpipe\([^)]*\)\s*',  '', p, flags=re.IGNORECASE)
-    # optional "Queue--" prefixes left by some printers
-    p = re.sub(r'\bQueue--', '', p)
-    # collapse spaces
-    p = re.sub(r'\s+', ' ', p).strip()
-    return p
+"""
+Usage:
+  python3 analyze_dcqcn_traces.py <sim_out.txt> <trace_packets.csv> <paths_file>
 
-# ---------- stdout parsing (CNPs, optional mapping) ----------
+What it prints:
+  - Flow table with: Flow, Pkts, ECN, ECN%, CNP-sent, CNP-rcvd, Route, FCT_us
+  - Average FCT (ms) across flows that carried packets
+  - Score = 1000 / Average_FCT_ms
+Also writes: dcqcn_flow_summary.csv
+"""
 
-def parse_stdout(stdout_path):
+def parse_paths(paths_file):
     """
-    Return:
-      - cnp_sent: dict[flow] -> count
-      - cnp_rcvd: dict[flow] -> count
-      - name_map: dict[flow_token] -> flow_token  (currently a pass-through; kept for future extensibility)
+    Parse lines like:
+      1000000001: srcPath  ||  dstPath
+    Returns map: flow_id -> "srcPath  ||  dstPath"
+    Also a friendlier short path name if present; otherwise uses raw.
     """
-    cnp_sent = defaultdict(int)
-    cnp_rcvd = defaultdict(int)
-    name_map = {}
+    id_to_path = {}
+    try:
+        with open(paths_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or ':' not in line:
+                    continue
+                # flow_id: path...
+                m = re.match(r'(\d+)\s*:\s*(.*)$', line)
+                if not m:
+                    continue
+                fid = int(m.group(1))
+                pth = m.group(2).strip()
 
-    if not os.path.exists(stdout_path):
-        return cnp_sent, cnp_rcvd, name_map
+                # Compact the queue/pipe prefixes if they exist (keep switch names)
+                # e.g., "queue(100000Mb/s,...)Queue--" -> "", " -> pipe(1us) -> " -> " -> "
+                pth_clean = re.sub(r'queue\([^)]+\)Queue--', '', pth)
+                pth_clean = pth_clean.replace(' -> pipe(1us) -> ', ' -> ')
+                id_to_path[fid] = pth_clean
+    except FileNotFoundError:
+        pass
+    return id_to_path
 
-    with open(stdout_path, 'r', errors='ignore') as f:
-        for line in f:
-            if '[CNP-SENT]' in line:
-                m = re.search(r'flow=([A-Za-z0-9_]+)', line)
-                if m: cnp_sent[m.group(1)] += 1
-            elif '[CNP-RCVD]' in line:
-                m = re.search(r'flow=([A-Za-z0-9_]+)', line)
-                if m: cnp_rcvd[m.group(1)] += 1
 
-            # (optional) future mapping hooks could go here if the log prints both numeric and name together
-            # e.g., "flow_id=1000000001 name=DCQCN0" -> name_map['1000000001']='DCQCN0' etc.
-
-    return cnp_sent, cnp_rcvd, name_map
-
-# ---------- sink CSV parsing (ECN marks / packet counts) ----------
-
-def parse_sink_csv(csv_path):
+def parse_sim_out(sim_out_file):
     """
+    Parse sim output (the .txt) for per-flow counters if present.
+    We’ll look for lines of the form in your current summary printer:
+      Flow <id> Pkts <n> ECN <n> CNP-sent <n> CNP-rcvd <n>
+    If not found, we’ll fall back to counting from the packet CSV.
+    """
+    data = {}
+    try:
+        with open(sim_out_file, 'r') as f:
+            for line in f:
+                # flexible extract of integers keyed by tokens
+                # Not strictly required if your analyzer derives these from CSV,
+                # but we keep this to stay compatible with your current file.
+                pass
+    except FileNotFoundError:
+        pass
+    return data  # possibly empty; we’ll fill from CSV
+
+
+def parse_trace_csv(trace_csv):
+    """
+    Read trace_packets.csv (columns: ts_us,flow,seq,ecn_marked,src_id,sink_id)
     Returns:
-      - ecn_marks: dict[flow] -> ECN-marked packet count
-      - pkts: dict[flow] -> packet count
+      - counters per flow: pkts, ecn
+      - FCT_us per flow: min(ts_us) .. max(ts_us)
     """
-    ecn_marks = defaultdict(int)
-    pkts = defaultdict(int)
+    per_flow = defaultdict(lambda: {
+        "pkts": 0,
+        "ecn": 0,
+        "t_first": None,
+        "t_last": None
+    })
+    try:
+        with open(trace_csv, newline='') as f:
+            reader = csv.DictReader(f)
+            # handle both 'flow' and 'flow_id' naming defensively
+            flow_key = 'flow' if 'flow' in reader.fieldnames else ('flow_id' if 'flow_id' in reader.fieldnames else None)
+            ts_key   = 'ts_us' if 'ts_us' in reader.fieldnames else None
+            ecn_key  = 'ecn_marked' if 'ecn_marked' in reader.fieldnames else None
 
-    if not csv_path or csv_path == '-' or not os.path.exists(csv_path):
-        return ecn_marks, pkts
+            if not flow_key or not ts_key:
+                print("ERROR: trace_packets.csv must include ts_us and flow columns.", file=sys.stderr)
+                return {}
 
-    with open(csv_path, newline='') as f:
-        rdr = csv.DictReader(f)
-        # Expected columns we wrote from DCQCNSink: flow, ecn_marked, ...
-        # Gracefully handle slight header variations by lowercasing keys.
-        for r in rdr:
-            row = {k.lower(): v for k, v in r.items()}
-            flow = row.get('flow', '')
-            if not flow:
-                # fallback: a different header name
-                for k in row:
-                    if 'flow' in k:
-                        flow = row[k]
-                        break
-            if not flow:
-                continue
-            pkts[flow] += 1
-            if row.get('ecn_marked', '0') == '1':
-                ecn_marks[flow] += 1
-    return ecn_marks, pkts
+            for row in reader:
+                try:
+                    fid = int(row[flow_key])
+                except:
+                    # skip bad rows
+                    continue
+                try:
+                    ts_us = float(row[ts_key])
+                except:
+                    continue
 
-# ---------- paths parsing ----------
+                ecn = 0
+                if ecn_key and row.get(ecn_key, '') != '':
+                    try:
+                        ecn = int(row[ecn_key])
+                    except:
+                        ecn = 0
 
-def parse_paths(paths_path):
-    """
-    Supports lines like:
-        1000000001: <SRC_PATH>  ||  <DST_PATH>
-    Also keeps compatibility with older formats:
-        Flow DCQCN2: A -> B -> C
-    Returns:
-      - routes: dict[flow_token] -> {'src': str, 'dst': str, 'raw': str}
-    """
-    routes = {}
-    if not paths_path or not os.path.exists(paths_path):
-        return routes
+                per_flow[fid]["pkts"] += 1
+                per_flow[fid]["ecn"]  += (1 if ecn else 0)
+                tf = per_flow[fid]["t_first"]
+                tl = per_flow[fid]["t_last"]
+                per_flow[fid]["t_first"] = ts_us if tf is None else min(tf, ts_us)
+                per_flow[fid]["t_last"]  = ts_us if tl is None else max(tl, ts_us)
+    except FileNotFoundError:
+        print(f"WARNING: {trace_csv} not found; FCT and ECN% will be unavailable.", file=sys.stderr)
+        return {}
 
-    with open(paths_path, 'r', errors='ignore') as f:
-        for line in f:
-            s = line.strip()
-            if not s:
-                continue
+    # compute FCT
+    for fid, d in per_flow.items():
+        if d["t_first"] is not None and d["t_last"] is not None:
+            d["fct_us"] = max(0.0, d["t_last"] - d["t_first"])
+        else:
+            d["fct_us"] = None
+    return per_flow
 
-            # New format: "<id>: src  ||  dst"
-            m_new = re.match(r'^([A-Za-z0-9_]+)\s*:\s*(.+)$', s)
-            if m_new:
-                flow = m_new.group(1)
-                body = m_new.group(2)
-
-                # split on the "||" separator if present
-                parts = [p.strip() for p in body.split('||', 1)]
-                if len(parts) == 2:
-                    src = clean_path(parts[0])
-                    dst = clean_path(parts[1])
-                    routes[flow] = {'src': src, 'dst': dst, 'raw': s}
-                else:
-                    # single path (older cases)
-                    single = clean_path(parts[0])
-                    routes[flow] = {'src': single, 'dst': '', 'raw': s}
-                continue
-
-            # Older heuristic: "Flow NAME: route..."
-            m_old = re.search(r'(?:^|\s)(?:Flow|flow)\s+([A-Za-z0-9_]+).*?:\s*(.*)$', s)
-            if m_old:
-                flow = m_old.group(1)
-                route = clean_path(m_old.group(2))
-                routes[flow] = {'src': route, 'dst': '', 'raw': s}
-                continue
-
-    return routes
-
-# ---------- main ----------
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: analyze_dcqcn_traces.py <stdout_log.txt> <trace_packets.csv or -> [uec_entry.paths]")
+    if len(sys.argv) < 4:
+        print(__doc__)
         sys.exit(1)
 
-    stdout_log = sys.argv[1]
-    sink_csv   = sys.argv[2]
-    paths_file = sys.argv[3] if len(sys.argv) > 3 else "uec_entry.paths"
+    sim_out_file = sys.argv[1]
+    trace_csv     = sys.argv[2]
+    paths_file    = sys.argv[3]
 
-    cnp_sent, cnp_rcvd, name_map = parse_stdout(stdout_log)
-    ecn_marks, pkts = parse_sink_csv(sink_csv)
-    routes = parse_paths(paths_file)
+    id_to_path = parse_paths(paths_file)
 
-    # Union of all flow keys we’ve seen across sources
-    flows = set().union(cnp_sent.keys(), cnp_rcvd.keys(), ecn_marks.keys(), pkts.keys(), routes.keys())
+    # Counters and FCT from packet CSV
+    csv_flow = parse_trace_csv(trace_csv)
 
-    # Pretty header
+    # Prepare rows ordered by flow id
+    flow_ids = sorted(csv_flow.keys())
+
+    # Header
     print("\nFlow Summary")
     print("------------")
-    print(f"{'Flow':10} {'Pkts':>10} {'ECN':>10} {'ECN%':>7} {'CNP-sent':>10} {'CNP-rcvd':>10}  Route")
+    print("{:<12} {:>10} {:>10} {:>7} {:>10} {:>10}  {}  {:>10}".format(
+        "Flow", "Pkts", "ECN", "ECN%", "CNP-sent", "CNP-rcvd", "Route", "FCT_us"))
 
+    # We don’t have CNP-sent/rcvd in the CSV—keep zeros unless you’re feeding them here.
+    # If you later write total CNPs into the stats file per flow, you can plug them in below.
     rows = []
-    for flow in sorted(flows):
-        p = pkts.get(flow, 0)
-        e = ecn_marks.get(flow, 0)
-        ecn_pct = (100.0 * e / p) if p > 0 else 0.0
+    fcts = []
 
-        # Route string for display: prefer "src || dst" if both available
-        rinfo = routes.get(flow, {})
-        if rinfo:
-            if rinfo.get('dst'):
-                route_str = f"{rinfo.get('src','')}  ||  {rinfo.get('dst','')}"
-            else:
-                route_str = rinfo.get('src','')
-        else:
-            # Maybe the flow was recorded with a different token (e.g., a name)
-            # If you have a name_map in the future, you can try mapping here.
-            route_str = ''
+    for fid in flow_ids:
+        d = csv_flow[fid]
+        pkts = d["pkts"]
+        ecn  = d["ecn"]
+        ecn_pct = (100.0 * ecn / pkts) if pkts > 0 else 0.0
+        fct_us = d.get("fct_us", None)
 
-        print(f"{flow:10} {p:10} {e:10} {ecn_pct:7.2f} {cnp_sent.get(flow,0):10} {cnp_rcvd.get(flow,0):10}  {route_str}")
+        route = id_to_path.get(fid, "")
+        cnps_sent = 0
+        cnps_rcvd = 0  # if you instrumented DCQCNSrc to count per-flow CNPs, load from a file and fill here.
 
         rows.append({
-            'flow': flow,
-            'pkts': p,
-            'ecn': e,
-            'ecn_rate_pct': f"{ecn_pct:.2f}",
-            'cnp_sent': cnp_sent.get(flow, 0),
-            'cnp_rcvd': cnp_rcvd.get(flow, 0),
-            'route_src': rinfo.get('src', ''),
-            'route_dst': rinfo.get('dst', ''),
-            'route_raw': rinfo.get('raw', '')
+            "Flow": fid,
+            "Pkts": pkts,
+            "ECN": ecn,
+            "ECN_pct": ecn_pct,
+            "CNP_sent": cnps_sent,
+            "CNP_rcvd": cnps_rcvd,
+            "Route": route,
+            "FCT_us": fct_us
         })
 
+        if fct_us is not None and pkts > 0:
+            fcts.append(fct_us)
+
+    # Print table
+    for r in rows:
+        print("{:<12} {:>10} {:>10} {:>7.2f} {:>10} {:>10}  {}  {:>10}".format(
+            r["Flow"], r["Pkts"], r["ECN"], r["ECN_pct"],
+            r["CNP_sent"], r["CNP_rcvd"], r["Route"], int(r["FCT_us"]) if r["FCT_us"] is not None else 0))
+
+    # Average FCT and Score
+    avg_fct_ms = (sum(fcts) / len(fcts) / 1000.0) if fcts else 0.0
+    score = (1000.0 / avg_fct_ms) if avg_fct_ms > 0 else 0.0
+
+    print("\nAverage FCT (ms): {:.3f}".format(avg_fct_ms))
+    print("Score (1000 / Avg FCT ms): {:.3f}".format(score))
+
+    # Write CSV
     out_csv = "dcqcn_flow_summary.csv"
-    with open(out_csv, 'w', newline='') as f:
-        w = csv.DictWriter(
-            f,
-            fieldnames=['flow','pkts','ecn','ecn_rate_pct','cnp_sent','cnp_rcvd','route_src','route_dst','route_raw']
-        )
-        w.writeheader()
-        w.writerows(rows)
+    with open(out_csv, "w", newline='') as f:
+        w = csv.writer(f)
+        w.writerow(["Flow", "Pkts", "ECN", "ECN_pct", "CNP_sent", "CNP_rcvd", "Route", "FCT_us"])
+        for r in rows:
+            w.writerow([r["Flow"], r["Pkts"], r["ECN"], "{:.2f}".format(r["ECN_pct"]),
+                        r["CNP_sent"], r["CNP_rcvd"], r["Route"], int(r["FCT_us"]) if r["FCT_us"] is not None else ""])
+        # Footer lines for averages & score (handy when you open in a sheet)
+        w.writerow([])
+        w.writerow(["Average_FCT_ms", "{:.3f}".format(avg_fct_ms)])
+        w.writerow(["Score_1000_over_avgFCTms", "{:.3f}".format(score)])
+
     print(f"\nWrote {out_csv}")
 
 if __name__ == "__main__":
