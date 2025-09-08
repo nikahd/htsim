@@ -5,6 +5,38 @@
 #include "queue_lossless.h"
 #include "queue_lossless_output.h"
 #include "route_table.h"
+#include "roce.h"   // for RocePacket, flow_id()
+
+// ---- file-scope definitions for AISwitch static members ----
+std::ofstream                AISwitch::_crumb_csv;
+bool                         AISwitch::_crumb_opened = false;
+std::unordered_set<uint64_t> AISwitch::_seen_pair;
+// -----------------------------------------------------------
+
+void AISwitch::open_crumb_csv_if_needed() {
+    if (_crumb_opened) return;
+    _crumb_csv.open("fabric_breadcrumbs.csv", std::ios::out | std::ios::app);
+    if (_crumb_csv && _crumb_csv.tellp() == 0) {
+        _crumb_csv << "time_ps,switch_id,switch_name,switch_type,flow_id\n";
+    }
+    _crumb_opened = true;
+}
+
+void AISwitch::breadcrumb_once_per_flow(flowid_t flow_id) {
+    open_crumb_csv_if_needed();
+    const uint64_t key = make_key(get_id(), flow_id);
+    if (_seen_pair.insert(key).second) {
+        // first time this (switch,flow) seen
+        _crumb_csv
+            << eventlist().now() << ","
+            << get_id() << ","
+            << nodename() << ","
+            << (int)_type  << ","   // or a string if you have one; e.g., typeToString(_type)
+            << flow_id
+            << "\n";
+        // no flush per line; append is fine
+    }
+}
 
 int AISwitch::precision_ts = 1;
 
@@ -116,11 +148,11 @@ void AISwitch::receivePacket(Packet& pkt) {
     // std::cout << nodename() << ": received packet called!"
     //           << " time (us): " << timeAsUs(eventlist().now()) << endl;
 
+    // Handle PAUSE frames first (unchanged)
     if (pkt.type() == ETH_PAUSE) {
         EthPausePacket* p = (EthPausePacket*)&pkt;
         // I must be in lossless mode!
-        // find the egress queue that should process this, and pass it over for
-        // processing.
+        // find the egress queue that should process this, and pass it over for processing.
         printf("Received a Pause Packet\n");
         for (size_t i = 0; i < _ports.size(); i++) {
             LosslessQueue* q = (LosslessQueue*)_ports.at(i);
@@ -130,34 +162,41 @@ void AISwitch::receivePacket(Packet& pkt) {
                 break;
             }
         }
-
         return;
     }
 
+    // --- BEGIN: fabric breadcrumb (once per (switch,flow)) ---
+    {
+        flowid_t fid = 0;
+        if (RocePacket* rp = dynamic_cast<RocePacket*>(&pkt)) {
+            fid = rp->flow_id();
+        }
+        if (fid) {
+            breadcrumb_once_per_flow(fid);
+        }
+    }
+    // --- END: fabric breadcrumb ---
+
+    // === Original ingress/egress pipeline (keep it inside the function) ===
     if (_packets.find(&pkt) == _packets.end()) {
         // ingress pipeline processing.
-
         _packets[&pkt] = true;
         receive_packet_counter++;
 
-        const Route* nh = getNextHop(pkt, NULL);
-        // set next hop which is peer switch.
+        const Route* nh = getNextHop(pkt, NULL); // set next hop peer switch
         pkt.set_route(*nh);
 
-        // emulate the switching latency between ingress and packet arriving at
-        // the egress queue.
+        // emulate switching latency before enqueue on egress queue
         _pipe->receivePacket(pkt);
     } else {
+        // egress pipeline processing.
         _packets.erase(&pkt);
-
-        // egress queue processing.
-
-        // cout << "Switch type " << _type <<  " id " << _id << " pkt dst " <<
-        // pkt.dst() << " dir " << pkt.get_direction() << endl;
-
+        // cout << "Switch type " << _type <<  " id " << _id << " pkt dst "
+        //      << pkt.dst() << " dir " << pkt.get_direction() << endl;
         pkt.sendOn();
     }
-};
+}
+
 
 void AISwitch::addHostPort(int addr, int flowid, PacketSink* transport) {
     if (this->_type != TOR) {
@@ -407,7 +446,7 @@ Route* AISwitch::getNextAvailableHop(Packet&            pkt,
                 ecmp_choice =
                     freeBSDHash(pkt.flow_id(), pkt.pathid(), _hash_salt) % available_hops->size();
 
-                // Note: For evaluate CC
+                // Note: For evaluate CC, all subflows will use the same T1, T2, etc.
                 // ecmp_choice =
                 //     freeBSDHash(1, pkt.pathid(), _hash_salt) % available_hops->size();
 
@@ -658,9 +697,9 @@ void AISwitch::addAvailableHopsLeafDown(Packet&              pkt,
     //      << endl;
     for (uint64_t k = 0; k < dc_topo->get_num_tor_per_torgroups(); k++) {
         // Note: this is for evaluating CC, disable the second ToR
-        if (k % 2 == 1) {
-            continue;
-        }
+        // if (k % 2 == 1) {
+        //     continue;
+        // }
         // End of evaluating CC
 
         uint64_t target_tor_id = dc_topo->getToRSwitchId(switch_info.region_idx,

@@ -127,6 +127,8 @@ struct queue_params {
     mem_b OWR_queuesize;
 
     // ECN K values in microseconds
+    // uint32_t tor_ECNKmin   = 80;
+    // uint32_t tor_ECNKmax   = 160;
     uint32_t tor_ECNKmin   = 80;
     uint32_t tor_ECNKmax   = 160;
     uint32_t leaf_ECNKmin  = 160;

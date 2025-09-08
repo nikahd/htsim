@@ -12,9 +12,9 @@ import os
 colors = ['skyblue', 'lightgreen', 'salmon', 'plum', 'lightcoral', 'lightgoldenrodyellow', 'lightcyan', 'lavender', 'lightpink', 'lightseagreen', 'lightsalmon', 'lightsteelblue', 'lightyellow']
 
 connection_matrices = [
-    # "one_one_1_200MB.cm",
+    "one_one_1_200MB.cm",
 #    "2_1_2_200MB.cm",
-   "4_1_4_2GB.cm",
+#    "4_1_4_2GB.cm",
 #    "one_one_1_200MB.cm",
 #    "one_one_2_200MB.cm",
 #    "one_one_4_200MB.cm",
@@ -26,7 +26,7 @@ connection_matrices = [
 #     "one_one_256_200MB.cm",
 ]
 # flow_numbers = [1, 2, 4, 8, 2, 4]  # Number of flows for each connection matrix, should be aligned with connection_matrices array
-flow_numbers = [4, 2, 4, 1, 2, 4, 8, 16, 32, 64, 128, 256]  # Number of flows for each connection matrix, should be aligned with connection_matrices array
+flow_numbers = [1, 2, 4, 1, 2, 4, 8, 16, 32, 64, 128, 256]  # Number of flows for each connection matrix, should be aligned with connection_matrices array
 
 bitmap_size = [1024]
 is_link_down = [0]
@@ -39,8 +39,8 @@ as_fast_recoverable = [0]
 jitter_path_replace_threshold = [0]
 loss_path_replace_threshold = [0]
 full_skip=[0]
-experiments = [1]
-use_jitter = 1
+experiments = [1, 2, 3, 4, 5]
+use_jitter = 0
 apply_mimd = 0
 enable_pfc = 0
 

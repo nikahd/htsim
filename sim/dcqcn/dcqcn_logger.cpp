@@ -1,5 +1,7 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 #include "dcqcn_logger.h"
+#include "dcqcn.h"         // brings DCQCNSrc/DCQCNSink into scope
+#include "rocepacket.h"    // for RocePacket
 
 #include <iomanip>
 #include <iostream>

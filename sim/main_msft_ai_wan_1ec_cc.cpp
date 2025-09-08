@@ -481,6 +481,8 @@ int main(int argc, char** argv) {
         vector<simtime_picosec> latency_pool;
         simtime_picosec         max_latency = 0;
 
+        // Note: latency numbers are hard-coded in the main files, for MSFT WAN Topology
+
         if (sim_params.use_jitter) {
             for (size_t idx = 0; idx < sim_params.link_params.link_factor_regional[0][1]; idx++) {
                 latency_pool.push_back(timeFromUs((uint32_t)(10000 + idx * 333)));

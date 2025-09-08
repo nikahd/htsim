@@ -571,25 +571,6 @@ void KECCCSrc::SACKTimeOut() {
 
         reduce_unacked(this_sack.num_missing_stripes * _erasure_coding->get_chunk_size() * _mss);
     }
-
-    // // reset CC variables
-    // _cwnd                    = _bdp * starting_cwnd_bdp_ratio;
-    // target_window            = _cwnd;
-    // _unacked                 = 0;
-    // _consecutive_decreases   = 0;
-    // _consecutive_good_epochs = 0;
-    // resetEpochParams();
-
-    // // reinitialize entropy values
-    // for (size_t i = 0; i < _erasure_coding->entropy_list.size(); i++) {
-    //     uint32_t new_ev = rand() % _erasure_coding->num_entropies;
-    //     while (find(_erasure_coding->entropy_list.begin(),
-    //                 _erasure_coding->entropy_list.begin() + i,
-    //                 new_ev) != _erasure_coding->entropy_list.begin() + i) {
-    //         new_ev = rand() % _erasure_coding->num_entropies;
-    //     }
-    //     _erasure_coding->entropy_list[i] = new_ev;
-    // }
 }
 
 void KECCCSrc::processECSACK(CbrPacket& pkt) {
@@ -599,7 +580,6 @@ void KECCCSrc::processECSACK(CbrPacket& pkt) {
          << ", unfinished_message_list.size(): " << unfinished_message_list.size() << endl;
 
     total_sack += 1;
-    reduce_unacked(_erasure_coding->get_chunk_size() * _mss);
 
     auto iter = find_if(
         unfinished_message_list.begin(), unfinished_message_list.end(), [&](const auto& tuple) {
@@ -716,24 +696,20 @@ void KECCCSrc::restartFlow() {
                    _erasure_coding->get_stripe_num(),
                    _erasure_coding->get_message_size_pkts() - 1));  // start with first packet
 
-    // reset CC variables
-    _cwnd                    = _bdp * starting_cwnd_bdp_ratio;
-    target_window            = _cwnd;
-    _unacked                 = 0;
-    _consecutive_decreases   = 0;
-    _consecutive_good_epochs = 0;
-    resetEpochParams();
+    // should not reset CC variables
+
+    reset_unacked();
 
     // reinitialize entropy values
-    for (size_t i = 0; i < _erasure_coding->entropy_list.size(); i++) {
-        uint32_t new_ev = rand() % _erasure_coding->num_entropies;
-        while (find(_erasure_coding->entropy_list.begin(),
-                    _erasure_coding->entropy_list.begin() + i,
-                    new_ev) != _erasure_coding->entropy_list.begin() + i) {
-            new_ev = rand() % _erasure_coding->num_entropies;
-        }
-        _erasure_coding->entropy_list[i] = new_ev;
-    }
+    // for (size_t i = 0; i < _erasure_coding->entropy_list.size(); i++) {
+    //     uint32_t new_ev = rand() % _erasure_coding->num_entropies;
+    //     while (find(_erasure_coding->entropy_list.begin(),
+    //                 _erasure_coding->entropy_list.begin() + i,
+    //                 new_ev) != _erasure_coding->entropy_list.begin() + i) {
+    //         new_ev = rand() % _erasure_coding->num_entropies;
+    //     }
+    //     _erasure_coding->entropy_list[i] = new_ev;
+    // }
 
     eventlist().sourceIsPendingRel(*this, _period);
 }
@@ -791,6 +767,63 @@ void KECCCSrc::send_packet() {
     eventlist().sourceIsPendingRel(*this, _period);
 }
 
+void KECCCSrc::processECMetricACK(CbrPacket& pkt) {
+    cout << "[CbrSrc] Received Metric ACK, flow_id: " << _flow.flow_id()
+         << ", pkt.id(): " << pkt.id() << ", num_bytes_acked: " << pkt.num_bytes_acked
+         << ", original data packet ts: " << timeAsUs(pkt.ts()) << endl;
+
+    uint32_t        path_id          = pkt.id() % _erasure_coding->entropy_list.size();
+    uint32_t        bytes_ecn_marked = pkt.bytes_ecn_marked;
+    uint64_t        now_time         = eventlist().now();
+    simtime_picosec ts               = pkt.ts();
+    uint64_t        num_bytes_acked  = pkt.num_bytes_acked;
+    uint64_t        ack_path_rtt     = now_time - ts;
+
+    cout << "processECMetricACK flow_id: " << _flow.flow_id() << " now_time: " << timeAsUs(now_time)
+         << ", ts: " << timeAsUs(ts) << ", ack_path_rtt: " << ack_path_rtt << endl;
+
+    bool pkt_ecn_marked = (bytes_ecn_marked > 0);
+    if (use_per_ack_ewma) {
+        // pass 1 if ecn_maked and 0 otherwise
+        ecn_fraction_ewma = computeEwma(ecn_fraction_ewma, pkt_ecn_marked, lcp_ecn_alpha);
+    }
+
+    // use metric ACK received bytes to update _unacked bytes;
+    // sender tracks total bytes sent since last updated cwnd to track in-flight bytes
+    // For debugging, print whether always in-flight > cwnd
+    reduce_unacked(pkt.num_bytes_acked);
+
+    vector<simtime_picosec> one_way_latency_delta, per_path_rtt;
+    one_way_latency_delta.resize(_erasure_coding->entropy_list.size(), 0);
+    per_path_rtt.resize(_erasure_coding->entropy_list.size(), ack_path_rtt);
+
+    simtime_picosec max_per_path_rtt = 0;
+
+    for (size_t i = 0; i < pkt.one_way_latencies.size(); i++) {
+        int64_t delta   = pkt.one_way_latencies[i] >= pkt.one_way_latencies[path_id]
+                              ? (pkt.one_way_latencies[i] - pkt.one_way_latencies[path_id])
+                              : (-(pkt.one_way_latencies[path_id] - pkt.one_way_latencies[i]));
+        per_path_rtt[i] = delta + ack_path_rtt;
+        cout << "flow_id: " << _flow.flow_id() << ", pkt.id(): " << pkt.id()
+             << ", one_way_latencies[" << i << "]: " << pkt.one_way_latencies[i]
+             << ", delta: " << delta << ", ack_path_rtt: " << ack_path_rtt << ", per_path_rtt[" << i
+             << "]: " << per_path_rtt[i] << endl;
+    }
+
+    uint64_t        path_to_replace = -1;
+    simtime_picosec max_rtt         = 0;
+    // Use the new helper function to compute path metrics
+    compute_path_metrics(per_path_rtt, &path_to_replace, &max_rtt);
+
+    cout << "apply_mimd=" << apply_mimd << " cwnd_Before_adjust: " << _cwnd << endl;
+
+    if (apply_mimd) {
+        adjust_window_mimd(path_to_replace, max_rtt, pkt.entropy_to_replace);
+    } else {
+        adjust_window_aimd(num_bytes_acked, bytes_ecn_marked, ts, max_rtt, pkt.entropy_to_replace);
+    }
+}
+
 void KECCCSrc::updateParams(uint64_t      base_rtt,
                             linkspeed_bps network_linkspeed,
                             double        init_cwnd_ratio,
@@ -823,7 +856,7 @@ void KECCCSrc::updateParams(uint64_t      base_rtt,
     cout << "_network_linkspeed: " << _network_linkspeed << endl;
 
     if (ai_bytes == 1 && ai_bytes_scale <= 0)
-        ai_bytes = _bdp * 0.005;  // compare to queue size, should be comparable to the queue size
+        ai_bytes = _bdp * 0.0004;  // compare to queue size, should be comparable to the queue size
     else if (ai_bytes_scale > 0) {
         if (ai_bytes_scale > 1) {
             cout << "ai_bytes_scale should be in (0, 1]" << endl;
@@ -944,63 +977,6 @@ void KECCCSrc::compute_path_metrics(vector<simtime_picosec>& per_path_rtt,
             *max_rtt         = second_max_rtt;
             *path_to_replace = jittery_path;
         }
-    }
-}
-
-void KECCCSrc::processECMetricACK(CbrPacket& pkt) {
-    cout << "[CbrSrc] Received Metric ACK, flow_id: " << _flow.flow_id()
-         << ", pkt.id(): " << pkt.id() << ", num_bytes_acked: " << pkt.num_bytes_acked
-         << ", original data packet ts: " << timeAsUs(pkt.ts()) << endl;
-
-    uint32_t        path_id          = pkt.id() % _erasure_coding->entropy_list.size();
-    uint32_t        bytes_ecn_marked = pkt.bytes_ecn_marked;
-    uint64_t        now_time         = eventlist().now();
-    simtime_picosec ts               = pkt.ts();
-    uint64_t        num_bytes_acked  = pkt.num_bytes_acked;
-    uint64_t        ack_path_rtt     = now_time - ts;
-
-    cout << "processECMetricACK flow_id: " << _flow.flow_id() << " now_time: " << timeAsUs(now_time)
-         << ", ts: " << timeAsUs(ts) << ", ack_path_rtt: " << ack_path_rtt << endl;
-
-    bool pkt_ecn_marked = (bytes_ecn_marked > 0);
-    if (use_per_ack_ewma) {
-        // pass 1 if ecn_maked and 0 otherwise
-        ecn_fraction_ewma = computeEwma(ecn_fraction_ewma, pkt_ecn_marked, lcp_ecn_alpha);
-    }
-
-    // use metric ACK received bytes to update _unacked bytes;
-    // sender tracks total bytes sent since last updated cwnd to track in-flight bytes
-    // For debugging, print whether always in-flight > cwnd
-    reduce_unacked(pkt.num_bytes_acked);
-
-    vector<simtime_picosec> one_way_latency_delta, per_path_rtt;
-    one_way_latency_delta.resize(_erasure_coding->entropy_list.size(), 0);
-    per_path_rtt.resize(_erasure_coding->entropy_list.size(), ack_path_rtt);
-
-    simtime_picosec max_per_path_rtt = 0;
-
-    for (size_t i = 0; i < pkt.one_way_latencies.size(); i++) {
-        int64_t delta   = pkt.one_way_latencies[i] >= pkt.one_way_latencies[path_id]
-                              ? (pkt.one_way_latencies[i] - pkt.one_way_latencies[path_id])
-                              : (-(pkt.one_way_latencies[path_id] - pkt.one_way_latencies[i]));
-        per_path_rtt[i] = delta + ack_path_rtt;
-        cout << "flow_id: " << _flow.flow_id() << ", pkt.id(): " << pkt.id()
-             << ", one_way_latencies[" << i << "]: " << pkt.one_way_latencies[i]
-             << ", delta: " << delta << ", ack_path_rtt: " << ack_path_rtt << ", per_path_rtt[" << i
-             << "]: " << per_path_rtt[i] << endl;
-    }
-
-    uint64_t        path_to_replace = -1;
-    simtime_picosec max_rtt         = 0;
-    // Use the new helper function to compute path metrics
-    compute_path_metrics(per_path_rtt, &path_to_replace, &max_rtt);
-
-    cout << "apply_mimd=" << apply_mimd << " cwnd_Before_adjust: " << _cwnd << endl;
-
-    if (apply_mimd) {
-        adjust_window_mimd(path_to_replace, max_rtt, pkt.entropy_to_replace);
-    } else {
-        adjust_window_aimd(num_bytes_acked, bytes_ecn_marked, ts, max_rtt, pkt.entropy_to_replace);
     }
 }
 

@@ -1,0 +1,61 @@
+name: C++ Build and Test CI
+
+on:
+  push:
+    branches: [main, main-refactored]
+  pull_request:
+    branches: [main, main-refactored]
+
+jobs:
+  build-linux:
+    name: Build and Test on Ubuntu
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends make g++ cmake clang-format
+
+      - name: Configure CMake project
+        run: cmake -S sim -B build
+
+      - name: Build CMake project
+        run: cmake --build build -j$(nproc)
+
+      - name: Run CTests
+        run: cd build && ctest --output-on-failure -j$(nproc)
+
+      - name: Run clang-format in ./sim and fail if there are formatting errors
+        run: |
+          find ./sim -regex '.*\.\(cpp\|h\|hpp\)$' -exec clang-format --dry-run -Werror {} + || \
+          (echo "Formatting errors detected. Please run 'find ./sim -regex '.*\.\(cpp\|h\|hpp\)$' -exec clang-format -i --style=file {} +' to fix." && exit 1)
+
+  build-macos:
+    name: Build and Test on macOS
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install make cmake clang-format
+
+      - name: Configure CMake project
+        run: cmake -S sim -B build
+
+      - name: Build CMake project
+        run: cmake --build build -j$(sysctl -n hw.ncpu)
+
+      - name: Run CTests
+        run: cd build && ctest --output-on-failure -j$(sysctl -n hw.ncpu)
+
+      - name: Run clang-format in ./sim and fail if there are formatting errors
+        run: |
+          find ./sim -regex '.*\.\(cpp\|h\|hpp\)$' -exec clang-format --dry-run -Werror {} + || \
+          (echo "Formatting errors detected. Please run 'find ./sim -regex '.*\.\(cpp\|h\|hpp\)$' -exec clang-format -i --style=file {} +' to fix." && exit 1)

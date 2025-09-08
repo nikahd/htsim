@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # To run this script, python3 sim/msft_ai/scripts/draw_kecbr_output_options_5runs.py
 
+import random
 import numpy as np 
 import matplotlib.pyplot as plt
 
@@ -11,7 +12,7 @@ import os
 
 
 foldername = "msft_ai_wan_1ec_cc"
-filename = "output_4_1_4_2GB_linkdown0_dropratep99_usejitter1_initcwnd0.7_bitmapsize1024_recoverable1_isfullskip0_fastrecoverable0_bitmapfulllossy1_fullpercent0.9_lossreplace0_jitterreplace0_mimd0_pfc0_exp1.txt"
+filename = "output_4_1_4_2GB_linkdown0_dropratep99_usejitter0_initcwnd0.7_bitmapsize1024_recoverable1_isfullskip0_fastrecoverable0_bitmapfulllossy1_fullpercent0.9_lossreplace0_jitterreplace0_mimd0_pfc0_exp1.txt"
 
 os.makedirs(f"{foldername}/compare_plots", exist_ok=True)
 figure_name = f"{foldername}/compare_plots/" + "queue_size_4_1_4_disable_pfc" + ".png"
@@ -29,7 +30,8 @@ with open(foldername + "/" + filename, "r") as file:
             if queue_name == this_queue_name:
                 timestamp = x[4]
                 queue_size = int(x[-1])
-                queue_sizes[queue_name].append((float(timestamp), queue_size))
+                if random.random() < 0.01:  
+                    queue_sizes[queue_name].append((float(timestamp), queue_size))
                 # print(timestamp, queue_size)
                 if float(timestamp) > 700000:
                     break

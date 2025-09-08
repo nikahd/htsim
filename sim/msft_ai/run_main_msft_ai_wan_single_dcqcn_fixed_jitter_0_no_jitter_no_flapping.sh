@@ -1,6 +1,11 @@
 #!/bin/bash
-
-CONN_MATRICES=("one_one_1_200MB.cm" "one_one_2_200MB.cm" "one_one_4_200MB.cm" "one_one_8_200MB.cm" "one_one_16_200MB.cm" "one_one_32_200MB.cm" "one_one_64_200MB.cm" "one_one_128_200MB.cm" "one_one_256_200MB.cm")
+# CONN_MATRICES=("one_one_4_1000MB.cm" "one_one_4sub_1000MB.cm")
+#CONN_MATRICES=("one_one_8_1500MB.cm")
+# CONN_MATRICES=("one_one_4_200MB.cm" "one_one_4_400MB.cm" "one_one_4_800MB.cm" "one_one_4_1000MB.cm" "one_one_8_1000MB.cm" "one_four_4_1000MB.cm")
+#CONN_MATRICES=("one_one_4_2GB.cm")
+# CONN_MATRICES=("one_one_4_200MB.cm" "one_one_4_400MB.cm" "one_one_4_800MB.cm" "one_one_4_1000MB.cm")
+CONN_MATRICES=("one_one_4_200MB.cm")
+#("one_one_1_200MB.cm"  "one_one_2_200MB.cm" "one_one_4_200MB.cm" "one_one_8_200MB.cm" "one_one_16_200MB.cm" "one_one_32_200MB.cm" "one_one_64_200MB.cm" "one_one_128_200MB.cm" "one_one_256_200MB.cm")
 IS_LINK_DOWN=(0)
 drop_rates=("0")
 use_jitter=0
@@ -36,7 +41,7 @@ for MATRIX in "${CONN_MATRICES[@]}"; do
                 echo "----------------------------------------"
 
                 $cmd > /dev/null 2> "$OUTFILE" # only store errors
-                # $cmd > "$OUTFILE"
+                $cmd > "$OUTFILE"
 
                 if [ $? -ne 0 ]; then
                     echo "Command timed out or failed"

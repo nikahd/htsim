@@ -1,10 +1,10 @@
 #!/bin/bash
  
 # CONN_MATRICES=("one_one_1_200MB.cm" "one_one_2_200MB.cm" "one_one_4_200MB.cm" "one_one_8_200MB.cm" "one_one_16_200MB.cm" "one_one_32_200MB.cm" "one_one_64_200MB.cm" "one_one_128_200MB.cm" "one_one_256_200MB.cm")
-CONN_MATRICES=("4_1_4_2GB.cm")
+CONN_MATRICES=("one_one_1_200MB.cm")
 IS_LINK_DOWN=(0)
 drop_rates=("p99")
-use_jitter=1
+use_jitter=0
 enable_pfc=0
 
 INIT_CWND_RATIO=(0.7) # 70%, 80%, 90%
@@ -18,7 +18,7 @@ original_loss_path_replace_threshold=(0)
 original_jittery_path_replace_threshold=(0)
 apply_mimd=0
 
-experiment_run=(1)
+experiment_run=(1 2 3 4 5)
 
 folder_name="msft_ai_wan_1ec_cc"
 binary_name="$folder_name"

@@ -850,7 +850,7 @@ void OneECCCSrc::updateParams(uint64_t      base_rtt,
     cout << "_network_linkspeed: " << _network_linkspeed << endl;
 
     if (ai_bytes == 1 && ai_bytes_scale <= 0)
-        ai_bytes = _bdp * 0.007;  // compare to queue size, should be comparable to the queue size
+        ai_bytes = _bdp * 0.0006;  // compare to queue size, should be comparable to the queue size
     else if (ai_bytes_scale > 0) {
         if (ai_bytes_scale > 1) {
             cout << "ai_bytes_scale should be in (0, 1]" << endl;
@@ -862,7 +862,7 @@ void OneECCCSrc::updateParams(uint64_t      base_rtt,
     baremetal_rtt = _base_rtt;
     assert(target_to_baremetal_ratio > 0);
     target_rtt                = baremetal_rtt * target_to_baremetal_ratio;
-    qa_measurement_period_end = target_rtt;
+    qa_measurement_period_end = 2 * target_rtt;
     float queue_latency_ns    = (float)queuesize_bytes * 8 / (float)(INTER_LINK_SPEED_MODERN / 1e9);
 
     qa_trigger_rtt = QA_TRIGGER_RTT_FRACTION * queue_latency_ns * 1000.0 + baremetal_rtt;
@@ -875,7 +875,7 @@ void OneECCCSrc::updateParams(uint64_t      base_rtt,
     lcp_k /= lcp_k_scale;
     // ai_bytes /= lcp_k_scale;
 
-    md_gain_ecn = 0.1;
+    md_gain_ecn = 0.025;
 
     if (md_gain_ecn <= 0 || md_gain_ecn >= 1) {
         md_gain_ecn = lcp_k * 4.0 / (_bdp + lcp_k);
@@ -1134,10 +1134,10 @@ void OneECCCSrc::adjust_window_aimd(uint64_t        num_bytes_acked,
         if (!qa_enabled && ts >= qa_measurement_period_end) {
             qa_enabled = true;
             if (qa_type == "long")
-                qa_measurement_period_end = eventlist().now() + target_rtt;
+                qa_measurement_period_end = eventlist().now() + 2 * target_rtt;
             else if (qa_type == "short")
                 qa_measurement_period_end =
-                    eventlist().now() + (target_rtt * 1.0 * constant_timestamp_epoch_ratio);
+                    eventlist().now() + (2 * target_rtt * 1.0 * constant_timestamp_epoch_ratio);
         } else if (qa_enabled && eventlist().now() >= qa_measurement_period_end) {
             processQaMeasurementEnd(rtt);
         }
@@ -1174,8 +1174,7 @@ void OneECCCSrc::additive_increase(uint64_t num_bytes_acked) {
         //_cwnd += num_bytes_acked;
 
         _statistics_outfile << "before increase: _cwnd: " << _cwnd << endl;
-        double amount = ((ai_bytes * num_bytes_acked / _cwnd) * fast_increase_round /
-                         epoch_period_factor * 0.5);
+        double amount = ((ai_bytes * num_bytes_acked / _cwnd) * fast_increase_round);
         _cwnd += amount;
         _statistics_outfile << "Doing Additive Increase " << _name.c_str() << " - Time "
                             << timeAsUs(eventlist().now()) << " - Amount " << amount << " - Cwnd "
@@ -1240,7 +1239,8 @@ void OneECCCSrc::processQaMeasurementEnd(simtime_picosec rtt) {
     bool trigger_qa = trigger_qa_rtt || trigger_qa_bytes_acked;
     if (trigger_qa) {
         // Reduce cwnd to be equal to the bytes received in this QA period.
-        _cwnd = bytes_acked_in_qa_period * 0.5;
+        // _cwnd = bytes_acked_in_qa_period * 0.96 / 2;
+        _cwnd = bytes_acked_in_qa_period / 2;
 
         // Reset epoch info
         resetEpochParams();
@@ -1259,10 +1259,10 @@ void OneECCCSrc::processQaMeasurementEnd(simtime_picosec rtt) {
         qa_measurement_period_end = eventlist().now();
     } else {
         if (qa_type == "long")
-            qa_measurement_period_end = eventlist().now() + target_rtt;
+            qa_measurement_period_end = eventlist().now() + 2 * target_rtt;
         else if (qa_type == "short")
             qa_measurement_period_end =
-                eventlist().now() + (target_rtt * 1.0 * constant_timestamp_epoch_ratio);
+                eventlist().now() + (2 * target_rtt * 1.0 * constant_timestamp_epoch_ratio);
     }
     bytes_acked_in_qa_period = 0;
     check_limits_cwnd();
@@ -1858,6 +1858,16 @@ uint32_t OneECCCSink::check_lossy_skip(bool do_full_skip) {
     } else {
         return 0;
     }
+}
+
+void OneECCCSink::update_per_path_loss_count(size_t bitmap_idx) {
+    uint32_t weight = 0;
+    if (per_path_last_loss.at(bitmap_idx)) {
+        weight = 2;
+    } else {
+        weight = 1;
+    }
+    per_path_loss_counts.at(bitmap_idx) += weight;
 }
 
 inline uint32_t OneECCCSink::count_consecutive_ones(
