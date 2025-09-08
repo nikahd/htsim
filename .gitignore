@@ -83,3 +83,16 @@ msft_ai_wan_single_dcqcn/*.txt
 
 # (if this is generated/not needed)
 uec_entry
+# Build artifacts
+build/
+*.a
+*.o
+*.so
+*.dylib
+
+# Generated outputs
+msft_ai_wan_single_dcqcn/*.txt
+*.csv
+
+# Generated/binary
+uec_entry
