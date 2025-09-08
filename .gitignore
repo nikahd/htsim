@@ -70,3 +70,16 @@ msft_ai_wan_single_dcqcn/*.txt
 
 # Optional: if uec_entry is generated or not needed in Git
 uec_entry
+# build artifacts
+build/
+*.a
+*.o
+*.so
+*.dylib
+
+# sim outputs
+msft_ai_wan_single_dcqcn/*.txt
+*.csv
+
+# (if this is generated/not needed)
+uec_entry
