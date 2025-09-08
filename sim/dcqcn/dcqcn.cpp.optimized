@@ -13,26 +13,23 @@
 using namespace std;
 
 ////////////////////////////////////////////////////////////////
-//  DCQCN SOURCE/SINK STATICS
-////////////////////////////////////////////////////////////////
-
-simtime_picosec DCQCNSink::_cnp_interval = timeFromUs(50.0);        // conservative when starting high
-simtime_picosec DCQCNSrc::_cc_update_period = timeFromUs(15000.0);  // WAN epoch (~15ms)
-
-double   DCQCNSrc::_alpha = 1;
-double   DCQCNSrc::_g     = 1.0 / 256;          // α EWMA decay
-uint64_t DCQCNSrc::_B     = 64 * 1024 * 1024;   // bytes per BC epoch (64MB)
-
-uint32_t      DCQCNSrc::_F    = 20;  // epochs before HI eligibility
-linkspeed_bps DCQCNSrc::_RAI  = 0;   // set per instance
-linkspeed_bps DCQCNSrc::_RHAI = 0;
-
-// single (correct!) definition of the static CSV stream
-std::ofstream DCQCNSink::pkt_csv;
-
-////////////////////////////////////////////////////////////////
 //  DCQCN SOURCE
 ////////////////////////////////////////////////////////////////
+
+/* keep track of RTOs.  Generally, we shouldn't see RTOs if
+   return-to-sender is enabled.  Otherwise we'll see them with very
+   large incasts. */
+simtime_picosec DCQCNSink::_cnp_interval =
+    timeFromUs(25.0);  // making this the same as Metric-ACK in EC_CC
+simtime_picosec DCQCNSrc::_cc_update_period = timeFromUs(15000.0);
+
+double   DCQCNSrc::_alpha = 1;
+double   DCQCNSrc::_g     = 1.0/256;     // quicker alpha adaptation for long RTT
+uint64_t DCQCNSrc::_B     = 48*1024*1024; // 48 MB; slower BC → fewer HI bursts
+
+uint32_t      DCQCNSrc::_F    = 12;
+linkspeed_bps DCQCNSrc::_RAI  = 0;
+linkspeed_bps DCQCNSrc::_RHAI = 0;
 
 DCQCNSrc::DCQCNSrc(RoceLogger*    logger,
                    TrafficLogger* pktlogger,
@@ -43,13 +40,16 @@ DCQCNSrc::DCQCNSrc(RoceLogger*    logger,
     : RoceSrc(logger, pktlogger, eventlist, rate, statistics_outfile) {
     _cnps_received = 0;
 
+    // linkspeed
     _link = linkspeed;
-    _RC   = rate;   // current
-    _RT   = rate;   // target
+    // current transmit rate
+    _RC = rate;
+    // target transmit rate
+    _RT = rate;
 
-    // Gentle steps for 70% start to avoid overshoot
-    _RAI  = std::max<linkspeed_bps>(_link / 192, rate / 48);
-    _RHAI = std::max<linkspeed_bps>(_link / 128, rate / 32);
+    // WAN-friendly growth (gentler): scale to link; avoid big leaps
+    _RAI  = std::max<linkspeed_bps>(_link / 128, rate / 64);
+    _RHAI = std::max<linkspeed_bps>(_link /  64, rate / 32);
 
     _last_cc_update    = 0;
     _last_alpha_update = 0;
@@ -58,93 +58,94 @@ DCQCNSrc::DCQCNSrc(RoceLogger*    logger,
     _BC               = 0;
     _byte_counter     = 0;
     _old_highest_sent = 0;
-
-    _hi_cooldown_epochs = 0;
 }
 
-void DCQCNSrc::processCNP(const CNPPacket& /*cnp*/) {
-    _RT = _RC;
-
-    // Floor: keep ≥ 50% line, or 75% of previous target
-    const linkspeed_bps floor_rate =
-        std::max<linkspeed_bps>(_link / 2, static_cast<linkspeed_bps>(_RT * 0.75));
-
-    // Clamp MD to avoid over-cut
-    const double md_alpha = std::min(0.35, _alpha);
+void DCQCNSrc::processCNP(const CNPPacket& cnp) {
+    _RT    = _RC;
+    // Keep a stronger floor so WAN flows can recover after a CNP storm
+    const linkspeed_bps floor_rate = std::max<linkspeed_bps>(1, _link / 5);  // ≈20% of line
+    // Clamp the MD factor so α can't cause extreme cuts in one shot
+    const double md_alpha = std::min(0.5, _alpha); // cap α contribution
     _RC = std::max<linkspeed_bps>(
-        static_cast<linkspeed_bps>(_RC * (1.0 - md_alpha / 2.0)),
-        floor_rate);
+         static_cast<linkspeed_bps>(_RC * (1.0 - md_alpha / 2.0)),
+         floor_rate
+     );
+     // slower EWMA growth (g=1/256 above)
+     _alpha = (1 - _g) * _alpha + _g;
 
-    _alpha = (1 - _g) * _alpha + _g;
+    //_ai_state = increase_state::fast_recovery;
 
-    _T = 0;
-    _BC = 0;
-    _byte_counter = 0;
+    _T                = 0;
+    _BC               = 0;
+    _byte_counter     = 0;
     _old_highest_sent = _highest_sent;
-    _hi_cooldown_epochs = 2;  // brief AI-only period
+
+    // cout << "At " << timeAsUs(eventlist().now()) << " " << _RC
+    //      << " CNP received, reduced rate; target rate is " << _RT << " node " << nodename()
+    //      << " alpha is " << _alpha;
 
     _pacing_rate = _RC;
     update_spacing();
+    // cout << " packet spacing is " << timeAsUs(_packet_spacing) << endl;
 
     _last_cc_update    = eventlist().now();
     _last_alpha_update = eventlist().now();
 
     eventlist().sourceIsPendingRel(*this, _cc_update_period);
-    std::cout << "[CNP-RCVD] flow=" << flow_id() << "\n";
 }
 
 void DCQCNSrc::increaseRate() {
-    if (_RC >= _link) return;
+    // cout << "inside increaseRate() _RC: " << _RC << " _link: " << _link << endl;
 
-    const bool in_cooldown = (_hi_cooldown_epochs > 0);
+    if (_RC >= _link) {
+        // no need to increase, already at line rate!
+        return;
+    }
 
-    if (std::max(_T, _BC) <= _F) {
+    if (max(_T, _BC) <= _F) {
         // fast recovery
         _RC = (_RT + _RC) / 2;
 
-    } else if (!in_cooldown && std::min(_T, _BC) > _F) {
-        // hyper-increase (tightly capped)
-        linkspeed_bps steps = (std::min(_T, _BC) - _F);
-        linkspeed_bps delta = steps * _RHAI;
-        delta = std::min<linkspeed_bps>(delta, _link / 256);
+    } else if (min(_T, _BC) > _F) {
+    // hyper increase, but tightly cap per-tick jump for WAN stability
+    linkspeed_bps steps = (min(_T, _BC) - _F);
+    linkspeed_bps delta = steps * _RHAI;
+    delta = std::min<linkspeed_bps>(delta, _link / 128); // tighter cap, less leap-ahead
         _RT  += delta;
         _RC   = (_RT + _RC) / 2;
 
     } else {
-        // additive increase
+        // active increase
         _RT += _RAI;
-        _RC  = (_RT + _RC) / 2;
+        _RC = (_RT + _RC) / 2;
     }
 
-    if (_RC > _link) _RC = _link;
+    if (_RC > _link) {
+        _RC = _link;
+    }
 
     _pacing_rate = _RC;
     update_spacing();
 
-    cout << "At " << timeAsUs(eventlist().now())
-         << " RC=" << _RC
-         << " RT=" << _RT
-         << " node=" << nodename()
-         << " spacing(us)=" << timeAsUs(_packet_spacing)
-         << " T=" << _T
-         << " BC=" << _BC
-         << " bytes_in_epoch=" << _byte_counter
-         << " alpha=" << _alpha
-         << " HI_cooldown=" << _hi_cooldown_epochs
-         << endl;
+    cout << "At " << timeAsUs(eventlist().now()) << " " << _RC << " increase target rate is " << _RT
+         << " node " << nodename() << " packet spacing is " << timeAsUs(_packet_spacing)
+         << " _T is " << _T << " _BC is " << _BC << " byte counter is " << _byte_counter
+         << " alpha is " << _alpha << endl;
 }
 
 void DCQCNSrc::doNextEvent() {
     bool reschedule = false;
 
-    // opportunistic rate sampling
+
+    // logging sending rate
     if (rand() % 1000 < 5) {
+
         if (_state_send == PAUSED) {
             _statistics_outfile << "Flow " << _name << " time: " << timeAsUs(eventlist().now())
-                                << " sending_rate: " << 0 << endl;
+                            << " sending_rate: " << 0 << endl;
         } else {
-            _statistics_outfile << "Flow " << _name << " time: " << timeAsUs(eventlist().now())
-                                << " sending_rate: " << _pacing_rate << endl;
+           _statistics_outfile << "Flow " << _name << " time: " << timeAsUs(eventlist().now())
+                            << " sending_rate: " << _pacing_rate << endl;
         }
     }
 
@@ -155,12 +156,17 @@ void DCQCNSrc::doNextEvent() {
 
     RoceSrc::doNextEvent();
 
+    // if ((_highest_sent - _old_highest_sent) > 0)
+    //     cout << "Adding " << (_highest_sent - _old_highest_sent) * _mss << " to sent bytes "
+    //          << _byte_counter << " " << _highest_sent << " flow_id: " << _name << endl;
+
     _byte_counter += (_highest_sent - _old_highest_sent) * _mss;
     _old_highest_sent = _highest_sent;
 
     if (_byte_counter >= _B) {
         _byte_counter = 0;
         _BC++;
+
         increaseRate();
         reschedule = true;
     }
@@ -173,7 +179,7 @@ void DCQCNSrc::doNextEvent() {
     if (eventlist().now() - _last_cc_update >= _cc_update_period) {
         _last_cc_update = eventlist().now();
         _T++;
-        if (_hi_cooldown_epochs > 0) _hi_cooldown_epochs--;
+
         increaseRate();
         reschedule = true;
     }
@@ -189,11 +195,13 @@ void DCQCNSrc::receivePacket(Packet& pkt) {
     }
 
     if (_stop_time && eventlist().now() >= _stop_time) {
+        // stop sending new data, but allow us to finish any retransmissions
         _flow_size = _highest_sent * _mss + _mss;
         _stop_time = 0;
     }
 
-    if (_done) return;
+    if (_done)
+        return;
 
     switch (pkt.type()) {
         case ETH_PAUSE:
@@ -215,59 +223,39 @@ void DCQCNSrc::receivePacket(Packet& pkt) {
             processCNP((const CNPPacket&)pkt);
             pkt.free();
             return;
+
         default:
             abort();
     }
+  
 }
 
 ////////////////////////////////////////////////////////////////
 //  DCQCN SINK
 ////////////////////////////////////////////////////////////////
 
-/* Only use this constructor when there is only one flow to this receiver */
-DCQCNSink::DCQCNSink(EventList& eventlist, ofstream& statistics_outfile)
-    : RoceSink(eventlist, statistics_outfile) {
+/* Only use this constructor when there is only one for to this receiver */
+DCQCNSink::DCQCNSink(EventList& eventlist, ofstream& statistics_outfile) : RoceSink(eventlist, statistics_outfile) {
     _last_cnp_sent_time            = UINT64_MAX;
     _marked_packets_since_last_cnp = 0;
     _packets_since_last_cnp        = 0;
-
-    // open CSV once
-    if (!pkt_csv.is_open()) {
-        open_csv();
-    }
-}
-
-void DCQCNSink::open_csv() {
-    if (!pkt_csv.is_open()) {
-        pkt_csv.open("trace_packets.csv", std::ios::out | std::ios::trunc);
-        if (pkt_csv.is_open()) {
-            pkt_csv << "ts_us,flow,seq,ecn_marked,src_id,sink_id\n";
-        } else {
-            std::cerr << "WARNING: could not open trace_packets.csv for writing\n";
-        }
-    }
 }
 
 // Receive a packet.
+// Note: _cumulative_ack is the last byte we've ACKed.
+// seqno is the first byte of the new packet.
 void DCQCNSink::receivePacket(Packet& pkt) {
-    const bool ecn_marked = ((pkt.flags() & ECN_CE) != 0);
+    // cout << "DCQCNSink received packet at " << timeAsUs(eventlist().now())
+    //      << " pkt type: " << pkt.type() << " flow_id: " << _src->_name << endl;
 
-    // Log packet observation at the sink
-    if (pkt_csv.is_open()) {
-        pkt_csv << timeAsUs(eventlist().now()) << ","
-                << (_src ? _src->flow_id() : -1) << ","
-                << -1 << ","                      // seq unknown here
-                << (ecn_marked ? 1 : 0) << ","
-                << static_cast<long long>(_srcaddr) << ","
-                << static_cast<long long>(get_id()) << "\n"; // use sink id instead of _dstaddr
-    }
-
+    bool ecn_marked = ((pkt.flags() & ECN_CE) != 0);
     RoceSink::receivePacket(pkt);
 
     if (ecn_marked) {
-        std::cout << "[CNP-SENT] at " << timeAsUs(eventlist().now())
-                  << "us flow=" << (_src ? _src->flow_id() : -1) << std::endl;
+        cout << "DCQCNSink received ECN marked packet at " << timeAsUs(eventlist().now())
+             << " generating CNP" << endl;
 
+        // generate CNPs here.
         if (_last_cnp_sent_time == UINT64_MAX ||
             eventlist().now() - _last_cnp_sent_time >= _cnp_interval) {
             send_cnp();
@@ -288,8 +276,10 @@ void DCQCNSink::doNextEvent() {
 }
 
 void DCQCNSink::send_cnp() {
-    CNPPacket* cnp = CNPPacket::newpkt(_src->_flow, *_route, _cumulative_ack, _srcaddr);
+    CNPPacket* cnp = 0;
+    cnp            = CNPPacket::newpkt(_src->_flow, *_route, _cumulative_ack, _srcaddr);
     cnp->set_pathid(0);
+
     cnp->sendOn();
 
     _last_cnp_sent_time            = eventlist().now();

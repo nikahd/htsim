@@ -5,6 +5,7 @@
 #include "loggers.h"
 
 class DCQCNSrc;
+class DCQCNSink;  // <-- add this
 
 class DCQCNLogger : public Logger {
 public:

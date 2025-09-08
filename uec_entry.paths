@@ -1,0 +1,8 @@
+1000000001: queue(100000Mb/s,4096000bytes)Queue--Reg0-DC0Serv0->LeafGroup0ToRGroup0ToR1(0) -> pipe(1us) -> Region0-DC0-LeafGroup0-ToRGroup0-ToR1  ||  queue(100000Mb/s,4096000bytes)Queue--Reg1-DC0Serv15->LeafGroup0ToRGroup15ToR0(0) -> pipe(1us) -> Region1-DC0-LeafGroup0-ToRGroup15-ToR0
+[TORS] flow=1000000001, src_tor="Region0-DC0-LeafGroup0-ToRGroup0-ToR1", dst_tor="Region1-DC0-LeafGroup0-ToRGroup15-ToR0"
+1000000002: queue(100000Mb/s,4096000bytes)Queue--Reg0-DC0Serv0->LeafGroup0ToRGroup1ToR0(0) -> pipe(1us) -> Region0-DC0-LeafGroup0-ToRGroup1-ToR0  ||  queue(100000Mb/s,4096000bytes)Queue--Reg1-DC0Serv15->LeafGroup0ToRGroup14ToR0(0) -> pipe(1us) -> Region1-DC0-LeafGroup0-ToRGroup14-ToR0
+[TORS] flow=1000000002, src_tor="Region0-DC0-LeafGroup0-ToRGroup1-ToR0", dst_tor="Region1-DC0-LeafGroup0-ToRGroup14-ToR0"
+1000000003: queue(100000Mb/s,4096000bytes)Queue--Reg0-DC0Serv0->LeafGroup0ToRGroup2ToR1(0) -> pipe(1us) -> Region0-DC0-LeafGroup0-ToRGroup2-ToR1  ||  queue(100000Mb/s,4096000bytes)Queue--Reg1-DC0Serv15->LeafGroup0ToRGroup13ToR0(0) -> pipe(1us) -> Region1-DC0-LeafGroup0-ToRGroup13-ToR0
+[TORS] flow=1000000003, src_tor="Region0-DC0-LeafGroup0-ToRGroup2-ToR1", dst_tor="Region1-DC0-LeafGroup0-ToRGroup13-ToR0"
+1000000004: queue(100000Mb/s,4096000bytes)Queue--Reg0-DC0Serv0->LeafGroup0ToRGroup4ToR0(0) -> pipe(1us) -> Region0-DC0-LeafGroup0-ToRGroup4-ToR0  ||  queue(100000Mb/s,4096000bytes)Queue--Reg1-DC0Serv15->LeafGroup0ToRGroup12ToR1(0) -> pipe(1us) -> Region1-DC0-LeafGroup0-ToRGroup12-ToR1
+[TORS] flow=1000000004, src_tor="Region0-DC0-LeafGroup0-ToRGroup4-ToR0", dst_tor="Region1-DC0-LeafGroup0-ToRGroup12-ToR1"

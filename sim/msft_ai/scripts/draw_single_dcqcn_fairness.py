@@ -12,9 +12,15 @@ import os
 colors = ['skyblue', 'lightgreen', 'salmon', 'plum', 'lightcoral', 'lightgoldenrodyellow', 'lightcyan', 'lavender', 'lightpink', 'lightseagreen', 'lightsalmon', 'lightsteelblue', 'lightyellow']
 
 connection_matrices = [
-   "one_one_1_200MB.cm",
+#   "one_one_1_200MB.cm",
 #    "one_one_2_200MB.cm",
-#    "one_one_4_200MB.cm",
+    "one_one_4_200MB.cm",
+#    "one_one_4_400MB.cm",
+#    "one_one_4_800MB.cm",
+#    "one_one_4_1000MB.cm",
+#    "one_four_4_1000MB.cm",
+#    "one_one_8_1000MB.cm",
+#    "one_one_8_1500MB.cm",
 #    "one_one_8_200MB.cm",
 #    "one_one_16_200MB.cm",
 #    "one_one_32_200MB.cm",
@@ -57,11 +63,11 @@ for matrix in connection_matrices:
                     lines = [line.strip() for line in lines if line.strip()]
                     sending_rate_dict = defaultdict(list)
                     for line in lines:
-                        if "Flow" in line and "finish" not in line:
+                        if "Flow" in line and "sending_rate" in line:
                             parts = line.split()
                             flow_id = parts[1]
                             timestamp = float(parts[3])
-                            sending_rate = float(parts[-1])
+                            sending_rate = float(parts[5])
                             if flow_id not in sending_rate_dict:
                                 sending_rate_dict[flow_id] = []
                             sending_rate_dict[flow_id].append((timestamp, sending_rate))

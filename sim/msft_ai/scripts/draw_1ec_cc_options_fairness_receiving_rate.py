@@ -41,7 +41,7 @@ jitter_path_replace_threshold = [0]
 loss_path_replace_threshold = [0]
 full_skip=[0]
 experiments = [1]
-use_jitter = 1
+use_jitter = 0
 apply_mimd = 0
 enable_pfc = 0
 

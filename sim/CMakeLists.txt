@@ -117,7 +117,7 @@ set(SOURCE_FILES
     msft_ai/1ecbr.cpp
     msft_ai/1ec_cc.cpp 
     msft_ai/cbr.cpp
-    msft_ai/cbrpacket.cpp
+    msft_ai/cbrpacket.cpp 
     msft_ai/AI_switch.cpp
     msft_ai/AI_DC_msoft.cpp
     msft_ai/AI_region_msoft.cpp

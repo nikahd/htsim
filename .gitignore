@@ -1,0 +1,46 @@
+# Compiled files
+*.o
+*.a
+*.out
+
+# Temporary files
+*.tmp
+*.log
+
+# Project specific executables and outputs
+parse_output
+htsim_*
+msft_ai_wan*
+simple_wan*
+*out.txt
+output*
+statistics*
+1ECBR/*
+kECBR/*
+1ecbr/*
+kecbr/*
+uec_entry*
+
+# Data files
+*.dat
+*.csv
+idmap.txt
+
+# Python
+__*/
+*.pyc
+.venv/
+
+# IDE and editor settings
+.vscode
+
+# Build and output directories
+build/
+docs/html
+
+# Media and documentation files
+*.pdf
+*.png
+
+# Exceptions (files to include despite being ignored above)
+!example_validate.json

@@ -4,12 +4,12 @@
 #define DCQCN_H
 
 /*
- * A DCQCN source and sink
+ * A DCQCN source and sink with tracing
  */
 
 #include <list>
 #include <map>
-// #include "util.h"
+#include <fstream>
 #include "cnppacket.h"
 #include "eth_pause_packet.h"
 #include "event_source.h"
@@ -57,11 +57,11 @@ private:
     simtime_picosec _last_cc_update, _last_alpha_update;
     linkspeed_bps   _RC, _RT, _link;
 
-    enum increase_state { invalid = 0, fast_recovery = 1, active_increase = 2 };
-
-    // increase_state _ai_state;
     uint16_t _T, _BC;
     uint64_t _byte_counter;
+    uint64_t _old_highest_sent;
+
+    int _hi_cooldown_epochs;
 };
 
 class DCQCNSink : public RoceSink {
@@ -70,11 +70,15 @@ class DCQCNSink : public RoceSink {
 public:
     DCQCNSink(EventList& eventlist, ofstream& statistics_outfile);
     virtual void doNextEvent();
+    virtual void receivePacket(Packet& pkt);
 
-    virtual void           receivePacket(Packet& pkt);
     static simtime_picosec _cnp_interval;
 
     inline id_t get_id() const { return EventSource::get_id(); }
+
+    // CSV tracing
+    static std::ofstream pkt_csv;
+    static void open_csv();
 
 private:
     simtime_picosec _last_cnp_sent_time;
@@ -82,7 +86,6 @@ private:
     uint32_t _marked_packets_since_last_cnp;
     uint32_t _packets_since_last_cnp;
 
-    // Mechanism
     void send_cnp();
 };
 

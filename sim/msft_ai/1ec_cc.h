@@ -272,17 +272,17 @@ public:
                              // be >= 0 and <= 1 so 10
     float           md_factor_rtt = -1;  // Multiplicative decrease gain for RTT-based reduction
     simtime_picosec target_qdelay = 0;
-    bool            use_qa        = false;
+    bool            use_qa        = true;
     bool            use_fi        = false;
     bool            use_rtt       = true;
     bool            use_ecn       = true;
     bool            use_rto_cwnd_reduction = true;
     bool            use_trimming           = false;
-    bool            apply_ai_per_epoch     = true;  // default apply ai is per ACK
+    bool            apply_ai_per_epoch     = false;  // default apply ai is per ACK
     double          lcp_k                  = 0;
     double          lcp_k_scale            = 1.0;
     float           target_to_baremetal_ratio =
-        1.5;  // what target_rtt = baremetal_rtt * target_to_baremetal_ratio
+        1.05;  // what target_rtt = baremetal_rtt * target_to_baremetal_ratio
     uint32_t fi_threshold        = 3;  // fast increase threshold
     int      fast_increase_round = 0;
     float    QA_TRIGGER_RTT_FRACTION =
@@ -311,7 +311,7 @@ public:
     float           lcp_ecn_alpha  = 1.0;
     simtime_picosec qa_trigger_rtt = 0;
 
-    float QA_CWND_RATIO_THRESHOLD = 0.5;
+    float QA_CWND_RATIO_THRESHOLD = 0.9;
 
     double jittery_path_replace_threshold_percentage = 0.1;
     bool   use_replace_path                          = false;

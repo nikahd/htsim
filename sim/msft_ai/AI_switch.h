@@ -11,6 +11,9 @@
 #include "callback_pipe.h"
 #include "fat_tree_switch.h"
 #include "switch.h"
+#include <unordered_set>
+#include <fstream>
+#include "roce.h"   // for flowid_t / RocePacket
 
 class AIDCMsoft;
 class AIRegionMsoft;
@@ -184,6 +187,8 @@ public:
 
     uint32_t getECNKMax() { return _ECNKmax_us; }
 
+    void breadcrumb_once_per_flow(flowid_t flow_id);
+
 private:
     node_type      _type;
     Pipe*          _pipe;
@@ -213,6 +218,18 @@ private:
     uint32_t _ECNKmax_us;  // in terms of microseconds
     double   _ECNPmin = 0;
     double   _ECNPmax = 1;
+
+    // ======== Breadcrumb (once per flow) ========
+    static void open_crumb_csv_if_needed();
+    static std::ofstream                _crumb_csv;
+    static bool                         _crumb_opened;
+    static std::unordered_set<uint64_t> _seen_pair;
+
+    static inline uint64_t make_key(uint64_t sid, uint64_t fid) {
+        return (sid << 32) ^ fid;
+    }
+    void        breadcrumb_once_per_flow(uint64_t flow_id);
+    // ============================================
 };
 
 #endif
