@@ -1,92 +1,90 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
-
 #ifndef DCQCN_H
 #define DCQCN_H
 
-/*
- * A DCQCN source and sink with tracing
- */
-
-#include <list>
-#include <map>
-#include <fstream>
-#include "cnppacket.h"
-#include "eth_pause_packet.h"
-#include "event_source.h"
+#include "config.h"
+#include "roce.h"      // RoceSrc/RoceSink base classes
 #include "eventlist.h"
-#include "helpers.h"
-#include "math.h"
-#include "packet.h"
-#include "packet_flow.h"
-#include "queue.h"
-#include "roce.h"
-#include "rocepacket.h"
-#include "trigger.h"
-#include "types.h"
-#define timeInf 0
+#include <fstream>
 
 class DCQCNSink;
-class Switch;
 
 class DCQCNSrc : public RoceSrc {
-    friend class DCQCNSink;
-
 public:
-    DCQCNSrc(RoceLogger*    logger,
-             TrafficLogger* pktlogger,
-             EventList&     eventlist,
-             linkspeed_bps  linkspeed,
-             linkspeed_bps  rate,
-             ofstream&      statistics_outfile);
+    DCQCNSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList& eventlist,
+             linkspeed_bps linkspeed, linkspeed_bps rate, std::ofstream& statistics_outfile);
 
-    virtual void receivePacket(Packet& pkt);
-    virtual void processCNP(const CNPPacket& cnp);
-    virtual void increaseRate();
-    virtual void doNextEvent();
+    void doNextEvent() override;
+    void receivePacket(Packet& pkt) override;
 
-    // should really be private, but loggers want to see:
-    uint32_t _cnps_received;
+    // ---- DCQCN global knobs (defaults compiled-in; may be overridden by env) ----
+    static simtime_picosec _cc_update_period; // epoch
+    static double          _g;                // alpha EWMA decay
+    static uint64_t        _B;                // bytes per BC epoch
+    static uint32_t        _F;                // epochs before HI eligible
+    static linkspeed_bps   _RAI;              // base AI step (set per instance)
+    static linkspeed_bps   _RHAI;             // HI step (set per instance)
 
-    static simtime_picosec _cc_update_period;
-    static double          _alpha, _g;
-    static uint32_t        _F;
-    static linkspeed_bps   _RAI, _RHAI;
-    static uint64_t        _B;
+    // Additional tunables (env-overridable)
+    static double    _md_cap;              // per-CNP MD cap
+    static double    _floor_line_frac;     // RC floor: fraction of line
+    static double    _floor_rt_frac;       // RC floor: fraction of previous RT
+    static uint32_t  _hi_cooldown_default; // epochs of AI-only after MD
+    static uint32_t  _hi_cap_div;          // HI cap limiter (link / div)
+
+    // one-time env override (safe re-entry)
+    static void apply_env_overrides_once();
+
+protected:
+    // Take Packet& here so header doesn’t need CNPPacket declaration
+    void processCNP(const Packet& cnp);
+    void increaseRate();
+
+    // state
+    linkspeed_bps   _link;
+    linkspeed_bps   _RC;      // current rate
+    linkspeed_bps   _RT;      // target rate
+    simtime_picosec _last_cc_update;
+    simtime_picosec _last_alpha_update;
+
+    uint32_t        _T;            // epoch counter (t-timer)
+    uint32_t        _BC;           // epoch counter (bytes-based)
+    uint64_t        _byte_counter;
+    uint64_t        _old_highest_sent;
+
+    uint32_t        _hi_cooldown_epochs;
+
+    // α is per-source (not static); _g is static
+    double          _alpha;
+
+    // diagnostics
+    uint64_t        _cnps_received = 0;
 
 private:
-    simtime_picosec _last_cc_update, _last_alpha_update;
-    linkspeed_bps   _RC, _RT, _link;
-
-    uint16_t _T, _BC;
-    uint64_t _byte_counter;
-    uint64_t _old_highest_sent;
-
-    int _hi_cooldown_epochs;
+    static bool     _env_applied;
 };
 
 class DCQCNSink : public RoceSink {
-    friend class DCQCNSrc;
-
 public:
-    DCQCNSink(EventList& eventlist, ofstream& statistics_outfile);
-    virtual void doNextEvent();
-    virtual void receivePacket(Packet& pkt);
+    DCQCNSink(EventList& eventlist, std::ofstream& statistics_outfile);
+
+    void receivePacket(Packet& pkt) override;
+    void doNextEvent() override;
 
     static simtime_picosec _cnp_interval;
 
-    inline id_t get_id() const { return EventSource::get_id(); }
+    static std::ofstream pkt_csv;  // packet observations
+    static std::ofstream cnp_csv;  // CNP events (sent/rcvd)
 
-    // CSV tracing
-    static std::ofstream pkt_csv;
     static void open_csv();
+    static void open_cnp_csv();
 
-private:
-    simtime_picosec _last_cnp_sent_time;
-
-    uint32_t _marked_packets_since_last_cnp;
-    uint32_t _packets_since_last_cnp;
-
+protected:
     void send_cnp();
+
+    simtime_picosec _last_cnp_sent_time;
+    uint64_t        _marked_packets_since_last_cnp;
+    uint64_t        _packets_since_last_cnp;
 };
 
-#endif
+#endif // DCQCN_H

@@ -8,7 +8,26 @@ import csv
 import argparse
 import subprocess
 from collections import defaultdict
+from pathlib import Path
 import matplotlib.pyplot as plt
+
+# =============== DCQCN knob overrides =================
+# Set env vars for the C++ binary. Omit keys to use defaults.
+# Edit these as you explore.
+DCQCN_KNOBS = {
+    # "DCQCN_CNP_INTERVAL_US": 50,      # sink CNP pacing (us)
+    # "DCQCN_EPOCH_US": 15000,          # control epoch (us)
+    # "DCQCN_ALPHA_INIT": 1.0,          # initial alpha
+    # "DCQCN_G": 1.0/256,               # alpha EWMA decay
+    # "DCQCN_B_BYTES": 64*1024*1024,    # bytes per BC epoch
+    # "DCQCN_F_EPOCHS": 20,             # HI eligibility epochs
+    # literals promoted to tunables:
+    # "DCQCN_MD_CAP": 0.35,             # per-CNP MD cap
+    # "DCQCN_FLOOR_LINE_FRAC": 0.50,    # floor >= frac*line
+    # "DCQCN_FLOOR_RT_FRAC": 0.75,      # floor >= frac*prev RT
+    # "DCQCN_HI_COOLDOWN": 2,           # epochs of AI-only after MD
+    # "DCQCN_HI_CAP_DIV": 256,          # HI cap = link / DIV
+}
 
 # ---------- helpers for file names ----------
 
@@ -140,14 +159,39 @@ def parse_trace_csv(trace_csv):
             d["fct_us"] = None
     return per_flow
 
+def parse_cnp_events(cnp_csv_path="cnp_events.csv"):
+    sent = defaultdict(int)
+    rcvd = defaultdict(int)
+    if not os.path.exists(cnp_csv_path):
+        return sent, rcvd
+    with open(cnp_csv_path, newline='') as f:
+        rdr = csv.DictReader(f)
+        fk = 'flow' if 'flow' in rdr.fieldnames else None
+        ek = 'event' if 'event' in rdr.fieldnames else None
+        if not fk or not ek:
+            return sent, rcvd
+        for row in rdr:
+            try:
+                fid = int(row[fk])
+            except:
+                continue
+            ev = row[ek].strip().lower()
+            if ev == 'sent':
+                sent[fid] += 1
+            elif ev == 'rcvd':
+                rcvd[fid] += 1
+    return sent, rcvd
+
 def print_and_write_summary(trace_csv, paths_file):
     id_to_path = parse_paths(paths_file)
     csv_flow = parse_trace_csv(trace_csv)
     flow_ids = sorted(csv_flow.keys())
 
+    cnp_sent, cnp_rcvd = parse_cnp_events("cnp_events.csv")
+
     print("\nFlow Summary")
     print("------------")
-    print("{:<12} {:>10} {:>10} {:>7} {:>10} {:>10}  {}  {:>10}".format(
+    print("{:<16} {:>10} {:>10} {:>7} {:>10} {:>10}  {}  {:>10}".format(
         "Flow", "Pkts", "ECN", "ECN%", "CNP-sent", "CNP-rcvd", "Route", "FCT_us"))
 
     rows, fcts = [], []
@@ -156,19 +200,17 @@ def print_and_write_summary(trace_csv, paths_file):
         pkts = d["pkts"]; ecn = d["ecn"]
         ecn_pct = (100.0 * ecn / pkts) if pkts > 0 else 0.0
         fct_us  = d.get("fct_us", None)
-        route = id_to_path.get(fid, "")
-        cnps_sent = 0
-        cnps_rcvd = 0
+        route   = id_to_path.get(fid, "")
         rows.append({
             "Flow": fid, "Pkts": pkts, "ECN": ecn, "ECN_pct": ecn_pct,
-            "CNP_sent": cnps_sent, "CNP_rcvd": cnps_rcvd,
+            "CNP_sent": cnp_sent.get(fid, 0), "CNP_rcvd": cnp_rcvd.get(fid, 0),
             "Route": route, "FCT_us": fct_us
         })
         if fct_us is not None and pkts > 0:
             fcts.append(fct_us)
 
     for r in rows:
-        print("{:<12} {:>10} {:>10} {:>7.2f} {:>10} {:>10}  {}  {:>10}".format(
+        print("{:<16} {:>10} {:>10} {:>7.2f} {:>10} {:>10}  {}  {:>10}".format(
             r["Flow"], r["Pkts"], r["ECN"], r["ECN_pct"],
             r["CNP_sent"], r["CNP_rcvd"], r["Route"],
             int(r["FCT_us"]) if r["FCT_us"] is not None else 0))
@@ -191,7 +233,36 @@ def print_and_write_summary(trace_csv, paths_file):
         w.writerow(["Score_1000_over_avgFCTms", "{:.3f}".format(score)])
     print(f"\nWrote {out_csv}")
 
-# ---------- simulation runner (bash content inline) ----------
+
+# ---------- matrix path resolution & simulation ----------
+
+def find_matrix_path(matrix: str) -> str:
+    """
+    Accept absolute/relative paths, otherwise probe common repo locations.
+    """
+    cand = Path(matrix)
+    if cand.exists():
+        return str(cand)
+
+    # Try env override first
+    env_dir = os.environ.get("MSFT_AI_CM_DIR")
+    candidates = []
+    if env_dir:
+        candidates.append(Path(env_dir) / matrix)
+
+    # Common in your repo/bash script
+    candidates += [
+        Path("./scripts/msft_ai_connection_matrices") / matrix,
+        Path("sim/msft_ai/scripts/msft_ai_connection_matrices") / matrix,
+        Path("msft_ai/scripts/msft_ai_connection_matrices") / matrix,
+        Path("scripts") / "msft_ai_connection_matrices" / matrix,
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p.resolve())
+
+    # Not found
+    return str(candidates[0])  # return first tried for error message
 
 def run_one_sim(matrix: str,
                 folder_name="msft_ai_wan_single_dcqcn",
@@ -202,7 +273,11 @@ def run_one_sim(matrix: str,
                 exp=1):
     os.makedirs(folder_name, exist_ok=True)
 
-    conn_matrix = f"./scripts/msft_ai_connection_matrices/{matrix}"
+    conn_matrix = find_matrix_path(matrix)
+    if not Path(conn_matrix).exists():
+        print(f"ERROR: matrix file not found: {conn_matrix}", file=sys.stderr)
+        sys.exit(1)
+
     base_noext = os.path.splitext(os.path.basename(conn_matrix))[0]
     suffix = f"_linkdown{link_down}_droprate{drop_rate}_usejitter{use_jitter}_exp{exp}"
 
@@ -230,8 +305,13 @@ def run_one_sim(matrix: str,
     print(f"Statistics will be written to: {stat_file}")
     print("----------------------------------------")
 
+    # Prepare environment with DCQCN knobs
+    env = os.environ.copy()
+    for k, v in DCQCN_KNOBS.items():
+        env[k] = str(v)
+
     with open(out_file, "w") as fout:
-        proc = subprocess.run(cmd, stdout=fout, stderr=subprocess.STDOUT)
+        proc = subprocess.run(cmd, stdout=fout, stderr=subprocess.STDOUT, env=env)
 
     if proc.returncode != 0:
         print("Command failed (see output).")
@@ -246,26 +326,25 @@ def run_one_sim(matrix: str,
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Run simulator for ONE connection matrix and then plot + summarize."
+        description="Run simulator for ONE connection matrix and then plot + summarize (with optional DCQCN knob overrides via env)."
     )
     ap.add_argument("--run-sim", metavar="MATRIX", required=True,
-                    help="Connection matrix filename, e.g. one_one_4_200MB.cm")
+                    help="Connection matrix filename OR path, e.g. one_one_4_200MB.cm")
     ap.add_argument("--binary", default="./build/msft_ai_wan_single_dcqcn",
                     help="Path to simulator binary.")
     ap.add_argument("--trace-csv", default="trace_packets.csv",
                     help="Path to trace_packets.csv.")
     ap.add_argument("--paths-file", default="uec_entry.paths",
                     help="Path to uec_entry.paths.")
-    # Optional overrides if needed later:
+    # Optional run toggles (match your bash)
     ap.add_argument("--drop-rate", default="0")
     ap.add_argument("--link-down", type=int, default=0)
     ap.add_argument("--use-jitter", type=int, default=0)
     ap.add_argument("--exp", type=int, default=1)
     args = ap.parse_args()
 
-    matrix = args.run_sim
     out_file, stat_file = run_one_sim(
-        matrix=matrix,
+        matrix=args.run_sim,
         binary_path=args.binary,
         drop_rate=args.drop_rate,
         link_down=args.link_down,

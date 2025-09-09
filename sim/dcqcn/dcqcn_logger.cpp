@@ -108,7 +108,7 @@ void DCQCNSinkLoggerSampling::doNextEvent() {
             else
                 rate = 0;
             _logfile->writeRecord(_sink_type,
-                                  sink->get_id(),
+                                  static_cast<EventSource&>(*sink).get_id(),
                                   _event_type,
                                   sink->cumulative_ack(),
                                   deltaB > 0 ? (deltaSnd * 100000 / deltaB) : 0,
