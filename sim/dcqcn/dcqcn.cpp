@@ -306,15 +306,24 @@ void DCQCNSink::open_cnp_csv() {
 void DCQCNSink::receivePacket(Packet& pkt) {
     const bool ecn_marked = ((pkt.flags() & ECN_CE) != 0);
 
+    // NEW: extract seq for data packets (0 if not RocePacket)
+    uint64_t seq = 0;
+    if (auto* rp = dynamic_cast<RocePacket*>(&pkt)) {
+        seq = rp->seqno();
+    }
+
     // Log observation (avoid ambiguous get_id(); write a constant tag instead)
     if (pkt_csv.is_open()) {
-        pkt_csv << timeAsUs(eventlist().now()) << ","
-                << (_src ? _src->flow_id() : -1) << ","
-                << -1 << ","
-                << (ecn_marked ? 1 : 0) << ","
-                << (long long)_srcaddr << ","
-                << 0 << "\n"; // sink_tag: placeholder to keep CSV stable
+       auto sid = static_cast<const EventSource*>(this)->get_id();
+
+    pkt_csv << timeAsUs(eventlist().now()) << ","
+            << (_src ? _src->flow_id() : -1) << ","
+            << static_cast<long long>(seq) << ","
+            << (ecn_marked ? 1 : 0) << ","
+            << static_cast<long long>(_srcaddr) << ","
+            << static_cast<long long>(sid) << "\n";
     }
+
 
     RoceSink::receivePacket(pkt);
 
