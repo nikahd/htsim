@@ -21,6 +21,29 @@ Usage:
   python3 sim/msft_ai/scripts/dcqcn_bayes_tune.py --run-sim one_one_4_200MB.cm --max-evals 5
 """
 
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DCQCN Bayesian/Random Tuning Runner
+
+- Launches the msft_ai_wan_single_dcqcn simulator with a given connection matrix
+- Passes DCQCN "direct knobs" via environment variables
+- Parses outputs to:
+    * Plot sending-rate fairness (per flow) from statistics_*.txt
+    * Build a Flow Summary from trace_packets.csv (dedup by (flow, seq))
+      including ECN%, CNP-sent/rcvd (from cnp_events.csv), per-flow FCT,
+      average FCT, and a "score" = 1000 / AvgFCT(ms)
+
+Layout:
+- CSVs for *every trial* are written in the main sim folder (alongside output_*/statistics_*)
+- Plots for *every trial* go under <folder>/option_plots/
+- The best trial’s plot is copied to <folder>/option_plots/fairness_best.png
+- The best trial’s CSV is copied to <folder>/dcqcn_flow_summary_best.csv
+
+Usage:
+  python3 sim/msft_ai/scripts/dcqcn_bayes_tune.py --run-sim one_one_4_200MB.cm --max-evals 5
+"""
+
 import os
 import re
 import sys
@@ -30,6 +53,7 @@ import random
 import argparse
 import subprocess
 import shutil
+from typing import Optional
 from collections import defaultdict
 
 import matplotlib.pyplot as plt

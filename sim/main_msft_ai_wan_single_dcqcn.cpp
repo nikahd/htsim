@@ -30,6 +30,7 @@
 #include "AI_region_msoft.h"
 #include "AI_switch.h"
 #include "network.h"
+#include <cstdlib>  // for srandom, srand48
 
 // Simulation params
 #define PRINT_PATHS 1
@@ -40,6 +41,15 @@ unsigned int subflow_count = 1;
 
 EventList eventlist;
 Logfile*  lg;
+
+static void set_global_seed(uint32_t seed) {
+    // libc RNGs used in various places; seed both
+    srandom(seed);
+    srand48(seed);
+
+    // If your code uses any custom RNG classes, seed them here too.
+    // e.g., RandomQueue::seed(seed);  (only if such a method exists)
+}
 
 void exit_error(char* progr) {
     cout << "Usage " << progr
@@ -88,6 +98,7 @@ struct simulation_parms {
     std::string drop_rate = "mean";
 
     uint32_t switch_hash_salt = 1;
+    uint32_t rng_seed = 1;   // <— NEW: global RNG seed for deterministic runs
 
     mem_b inter_queuesize = INFINITE_BUFFER_SIZE;
     mem_b intra_queuesize = INFINITE_BUFFER_SIZE;
@@ -427,11 +438,16 @@ void executeTraffixMatrix(Logfile& logfile,
 }
 
 int main(int argc, char** argv) {
-    srand(time(NULL));
+    // Parse flags once
+    parseCommandLine(argc, argv);
+
+    // Seed all RNGs deterministically for this run
+    set_global_seed(sim_params.rng_seed);
+    std::cout << "[seed] rng_seed=" << sim_params.rng_seed
+              << " (switch_hash_salt=" << sim_params.switch_hash_salt << ")\n";
 
     COLLECT_DATA = sim_params.collect_data;
     sim_params.filename << "logout.dat";
-    parseCommandLine(argc, argv);
 
     cout << "All the arguments are parsed!" << endl;
     cout << "---------------------------\n\n" << endl;
@@ -439,7 +455,8 @@ int main(int argc, char** argv) {
     Packet::set_packet_size(PKT_SIZE_MODERN);
     cout << "MTU is " << PKT_SIZE_MODERN << " B" << endl;
 
-    SINGLE_PKT_TRASMISSION_TIME_MODERN = Packet::data_packet_size() * 8 / (LINK_SPEED_MODERN);
+    SINGLE_PKT_TRASMISSION_TIME_MODERN =
+        Packet::data_packet_size() * 8 / (LINK_SPEED_MODERN);
 
     initializeLoggingFolders();
 
@@ -692,6 +709,11 @@ void parseCommandLine(int argc, char** argv) {
             sim_params.switch_latency = timeFromNs(atof(argv[i + 1]));
             i++;
             cout << "Switch latency is " << sim_params.switch_latency << " ps" << endl;
+        }else if (!strcmp(argv[i], "-seed")) {
+            sim_params.rng_seed = (uint32_t)atoi(argv[i + 1]);
+            // Keep ECMP hashing in sync with the RNG, so route choices are reproducible
+            sim_params.switch_hash_salt = sim_params.rng_seed;
+            i++;
         } else if (!strcmp(argv[i], "-hop_latency")) {
             sim_params.hop_latency = timeFromNs(atof(argv[i + 1]));
             LINK_DELAY_MODERN = sim_params.hop_latency / 1000;

@@ -11,45 +11,76 @@ from collections import defaultdict
 from pathlib import Path
 import matplotlib.pyplot as plt
 
-# =============== DCQCN knob overrides =================
-# Set env vars for the C++ binary. Omit keys to use defaults.
-# Edit these as you explore.
+# ============================================================
+# DCQCN knob overrides (sent to the C++ binary via env vars)
+# Leave any key out to use the binary's compiled default.
+# ============================================================
+
 DCQCN_KNOBS = {
-    # "DCQCN_CNP_INTERVAL_US": 50,      # sink CNP pacing (us)
-    # "DCQCN_EPOCH_US": 15000,          # control epoch (us)
-    # "DCQCN_ALPHA_INIT": 1.0,          # initial alpha
-    # "DCQCN_G": 1.0/256,               # alpha EWMA decay
-    # "DCQCN_B_BYTES": 64*1024*1024,    # bytes per BC epoch
-    # "DCQCN_F_EPOCHS": 20,             # HI eligibility epochs
-    # literals promoted to tunables:
-    # "DCQCN_MD_CAP": 0.35,             # per-CNP MD cap
-    # "DCQCN_FLOOR_LINE_FRAC": 0.50,    # floor >= frac*line
-    # "DCQCN_FLOOR_RT_FRAC": 0.75,      # floor >= frac*prev RT
-    # "DCQCN_HI_COOLDOWN": 2,           # epochs of AI-only after MD
-    # "DCQCN_HI_CAP_DIV": 256,          # HI cap = link / DIV
+    "DCQCN_CNP_INTERVAL_US": 173,                 # sink CNP pacing (us)
+    "DCQCN_EPOCH_US": 5648,                       # control epoch (us)
+    "DCQCN_ALPHA_INIT": 0.07376021746153359,      # initial alpha
+    "DCQCN_G": 0.02822790251854281,               # alpha EWMA decay
+    "DCQCN_B_BYTES": 68306285,                    # bytes per BC epoch
+    "DCQCN_F_EPOCHS": 10,                         # HI eligibility epochs
+    "DCQCN_MD_CAP": 0.6023534106230093,           # per-CNP MD cap
+    "DCQCN_FLOOR_LINE_FRAC": 0.6251945643094746,  # floor >= frac*line
+    "DCQCN_FLOOR_RT_FRAC": 0.9014808054671803,    # floor >= frac*prev RT
+    "DCQCN_HI_COOLDOWN": 1,                       # epochs of AI-only after MD
+    "DCQCN_HI_CAP_DIV": 668,                      # HI cap = link / DIV
 }
 
-# ---------- helpers for file names ----------
+# ============================================================
+# Helpers: paths & plotting
+# ============================================================
 
-def stat_path_from_sim_out(sim_out_path: str) -> str:
-    base = os.path.basename(sim_out_path)
-    return os.path.join(os.path.dirname(sim_out_path),
-                        base.replace("output_", "statistics_"))
+def find_matrix_path(matrix: str) -> str:
+    """
+    Accept absolute/relative paths, otherwise probe common repo locations.
+    """
+    cand = Path(matrix)
+    if cand.exists():
+        return str(cand.resolve())
+
+    env_dir = os.environ.get("MSFT_AI_CM_DIR")
+    candidates = []
+    if env_dir:
+        candidates.append(Path(env_dir) / matrix)
+
+    candidates += [
+        Path("./scripts/msft_ai_connection_matrices") / matrix,
+        Path("sim/msft_ai/scripts/msft_ai_connection_matrices") / matrix,
+        Path("msft_ai/scripts/msft_ai_connection_matrices") / matrix,
+        Path("scripts") / "msft_ai_connection_matrices" / matrix,
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p.resolve())
+    # fallback (for a nicer error message later)
+    return str((Path("./scripts/msft_ai_connection_matrices") / matrix).resolve())
 
 def plot_path_from_stat(stat_path: str) -> str:
     folder = os.path.dirname(stat_path)
-    os.makedirs(os.path.join(folder, "option_plots"), exist_ok=True)
+    plots = os.path.join(folder, "option_plots")
+    os.makedirs(plots, exist_ok=True)
     base = os.path.basename(stat_path)
-    m = re.match(r"statistics_(.+?)_linkdown(\d+)_droprate([0-9a-zA-Z.]+)_usejitter(\d+)_exp(\d+)\.txt", base)
+    m = re.match(
+        r"statistics_(.+?)_linkdown(\d+)_droprate([0-9a-zA-Z.]+)_usejitter(\d+)_exp(\d+)\.txt",
+        base,
+    )
     if not m:
-        return os.path.join(folder, "option_plots", f"fairness_{base}.png")
+        return os.path.join(plots, f"fairness_{base}.png")
     matrix, link, droprate, usejit, _exp = m.groups()
-    return os.path.join(folder, "option_plots",
-                        f"fairness_{matrix}_link{link}_usejitter{usejit}_droprate{droprate}_initcwnd0.7.png")
-
-# ---------- fairness plot (parse statistics_*.txt) ----------
+    return os.path.join(
+        plots,
+        f"fairness_{matrix}_link{link}_usejitter{usejit}_droprate{droprate}_initcwnd0.7.png",
+    )
 
 def parse_sending_rates(stat_path: str):
+    """
+    Read statistics_*.txt and extract (time_us, sending_rate_bps) per flow.
+    Returns dict: { flow_id_str -> [(t_us, rate_bps), ...] }.
+    """
     sending_rate_dict = defaultdict(list)
     if not os.path.exists(stat_path):
         print(f"WARNING: statistics file not found: {stat_path}")
@@ -101,9 +132,15 @@ def draw_fairness_plot(sending_rate_dict, out_png: str, title: str):
     plt.savefig(out_png)
     print(f"Plotting {out_png}")
 
-# ---------- trace analysis (paths + ECN/CNP + FCT + score) ----------
+# ============================================================
+# Trace analysis (paths + ECN/CNP + FCT + score)
+# ============================================================
 
 def parse_paths(paths_file):
+    """
+    Parse <basename>.paths into { flow_id(int) -> human_readable_path }.
+    Strips queue(...) and pipe(...) boilerplate for readability.
+    """
     id_to_path = {}
     try:
         with open(paths_file, 'r') as f:
@@ -124,74 +161,102 @@ def parse_paths(paths_file):
     return id_to_path
 
 def parse_trace_csv(trace_csv):
-    per_flow = defaultdict(lambda: {"pkts":0, "ecn":0, "t_first":None, "t_last":None})
+    """
+    De-duplicate by (flow, seq) using the real sequence numbers now logged by the sink.
+    FCT per flow = max(last_ts) - min(first_ts) among unique seqs.
+    Returns { flow_id(int) -> {"pkts": int, "ecn": int, "fct_us": float|None} }.
+    """
+    per_flow = defaultdict(lambda: {
+        "seen_seqs": set(),
+        "seq_first_ts": {},
+        "seq_last_ts": {},
+        "ecn_marks": 0
+    })
     try:
         with open(trace_csv, newline='') as f:
             reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                print(f"ERROR: empty or invalid CSV: {trace_csv}", file=sys.stderr)
+                return {}
             flow_key = 'flow' if 'flow' in reader.fieldnames else ('flow_id' if 'flow_id' in reader.fieldnames else None)
             ts_key   = 'ts_us' if 'ts_us' in reader.fieldnames else None
+            seq_key  = 'seq'   # our sink writes this
             ecn_key  = 'ecn_marked' if 'ecn_marked' in reader.fieldnames else None
-            if not flow_key or not ts_key:
-                print("ERROR: trace_packets.csv must include ts_us and flow columns.", file=sys.stderr)
+            if not (flow_key and ts_key and seq_key):
+                print("ERROR: trace_packets.csv must include ts_us, flow, and seq columns.", file=sys.stderr)
                 return {}
             for row in reader:
                 try:
-                    fid = int(row[flow_key])
-                    ts = float(row[ts_key])
-                except:
+                    fid = int(row[flow_key]); ts = float(row[ts_key]); seq = int(row.get(seq_key, 0))
+                except Exception:
                     continue
-                ecn = 0
-                if ecn_key and row.get(ecn_key, '') != '':
-                    try: ecn = int(row[ecn_key])
-                    except: ecn = 0
                 d = per_flow[fid]
-                d["pkts"] += 1
-                d["ecn"]  += (1 if ecn else 0)
-                d["t_first"] = ts if d["t_first"] is None else min(d["t_first"], ts)
-                d["t_last"]  = ts if d["t_last"]  is None else max(d["t_last"], ts)
+                if ecn_key and row.get(ecn_key, ''):
+                    try:
+                        if int(row[ecn_key]) == 1:
+                            d["ecn_marks"] += 1
+                    except:
+                        pass
+                if seq not in d["seen_seqs"]:
+                    d["seen_seqs"].add(seq)
+                    d["seq_first_ts"][seq] = ts
+                    d["seq_last_ts"][seq]  = ts
+                else:
+                    d["seq_last_ts"][seq] = max(d["seq_last_ts"][seq], ts)
     except FileNotFoundError:
         print(f"WARNING: {trace_csv} not found; FCT and ECN% will be unavailable.", file=sys.stderr)
         return {}
-    for d in per_flow.values():
-        if d["t_first"] is not None and d["t_last"] is not None:
-            d["fct_us"] = max(0.0, d["t_last"] - d["t_first"])
+
+    summary = {}
+    for fid, d in per_flow.items():
+        unique_pkts = len(d["seen_seqs"])
+        ecn = d["ecn_marks"]
+        if unique_pkts > 0:
+            t_first = min(d["seq_first_ts"].values())
+            t_last  = max(d["seq_last_ts"].values())
+            fct_us  = max(0.0, t_last - t_first)
         else:
-            d["fct_us"] = None
-    return per_flow
+            fct_us = None
+        summary[fid] = {"pkts": unique_pkts, "ecn": ecn, "fct_us": fct_us}
+    return summary
 
 def parse_cnp_events(cnp_csv_path="cnp_events.csv"):
+    """
+    Parse cnp_events.csv if present.
+    Returns (sent_counts, rcvd_counts) as dicts: flow_id -> count.
+    """
     sent = defaultdict(int)
     rcvd = defaultdict(int)
     if not os.path.exists(cnp_csv_path):
         return sent, rcvd
-    with open(cnp_csv_path, newline='') as f:
-        rdr = csv.DictReader(f)
-        fk = 'flow' if 'flow' in rdr.fieldnames else None
-        ek = 'event' if 'event' in rdr.fieldnames else None
-        if not fk or not ek:
-            return sent, rcvd
-        for row in rdr:
-            try:
-                fid = int(row[fk])
-            except:
-                continue
-            ev = row[ek].strip().lower()
-            if ev == 'sent':
-                sent[fid] += 1
-            elif ev == 'rcvd':
-                rcvd[fid] += 1
+    try:
+        with open(cnp_csv_path, newline="") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames or "flow" not in reader.fieldnames or "event" not in reader.fieldnames:
+                return sent, rcvd
+            for row in reader:
+                try:
+                    fid = int(row["flow"])
+                    ev  = row["event"].strip().upper()
+                except Exception:
+                    continue
+                if ev == "SENT":
+                    sent[fid] += 1
+                elif ev in ("RCVD", "RECV", "RECEIVED"):
+                    rcvd[fid] += 1
+    except Exception:
+        pass
     return sent, rcvd
 
 def print_and_write_summary(trace_csv, paths_file):
     id_to_path = parse_paths(paths_file)
-    csv_flow = parse_trace_csv(trace_csv)
-    flow_ids = sorted(csv_flow.keys())
-
+    csv_flow   = parse_trace_csv(trace_csv)
+    flow_ids   = sorted(csv_flow.keys())
     cnp_sent, cnp_rcvd = parse_cnp_events("cnp_events.csv")
 
     print("\nFlow Summary")
     print("------------")
-    print("{:<16} {:>10} {:>10} {:>7} {:>10} {:>10}  {}  {:>10}".format(
+    print("{:<22} {:>10} {:>10} {:>7} {:>10} {:>10}  {}  {:>10}".format(
         "Flow", "Pkts", "ECN", "ECN%", "CNP-sent", "CNP-rcvd", "Route", "FCT_us"))
 
     rows, fcts = [], []
@@ -210,7 +275,7 @@ def print_and_write_summary(trace_csv, paths_file):
             fcts.append(fct_us)
 
     for r in rows:
-        print("{:<16} {:>10} {:>10} {:>7.2f} {:>10} {:>10}  {}  {:>10}".format(
+        print("{:<22} {:>10} {:>10} {:>7.2f} {:>10} {:>10}  {}  {:>10}".format(
             r["Flow"], r["Pkts"], r["ECN"], r["ECN_pct"],
             r["CNP_sent"], r["CNP_rcvd"], r["Route"],
             int(r["FCT_us"]) if r["FCT_us"] is not None else 0))
@@ -233,36 +298,9 @@ def print_and_write_summary(trace_csv, paths_file):
         w.writerow(["Score_1000_over_avgFCTms", "{:.3f}".format(score)])
     print(f"\nWrote {out_csv}")
 
-
-# ---------- matrix path resolution & simulation ----------
-
-def find_matrix_path(matrix: str) -> str:
-    """
-    Accept absolute/relative paths, otherwise probe common repo locations.
-    """
-    cand = Path(matrix)
-    if cand.exists():
-        return str(cand)
-
-    # Try env override first
-    env_dir = os.environ.get("MSFT_AI_CM_DIR")
-    candidates = []
-    if env_dir:
-        candidates.append(Path(env_dir) / matrix)
-
-    # Common in your repo/bash script
-    candidates += [
-        Path("./scripts/msft_ai_connection_matrices") / matrix,
-        Path("sim/msft_ai/scripts/msft_ai_connection_matrices") / matrix,
-        Path("msft_ai/scripts/msft_ai_connection_matrices") / matrix,
-        Path("scripts") / "msft_ai_connection_matrices" / matrix,
-    ]
-    for p in candidates:
-        if p.exists():
-            return str(p.resolve())
-
-    # Not found
-    return str(candidates[0])  # return first tried for error message
+# ============================================================
+# Simulation runner (deterministic + stale CSV cleanup)
+# ============================================================
 
 def run_one_sim(matrix: str,
                 folder_name="msft_ai_wan_single_dcqcn",
@@ -270,8 +308,21 @@ def run_one_sim(matrix: str,
                 drop_rate="0",
                 link_down=0,
                 use_jitter=0,
-                exp=1):
+                exp=1,
+                seed=1):
+    """
+    Run the simulator once for `matrix`.
+      - Deletes stale CSVs so analysis never reads leftovers.
+      - Passes an explicit -seed to the binary for reproducibility.
+    """
     os.makedirs(folder_name, exist_ok=True)
+
+    # Remove stale CSVs produced by previous runs
+    for f in ("trace_packets.csv", "cnp_events.csv", "fabric_breadcrumbs.csv"):
+        try:
+            os.remove(f)
+        except FileNotFoundError:
+            pass
 
     conn_matrix = find_matrix_path(matrix)
     if not Path(conn_matrix).exists():
@@ -298,6 +349,7 @@ def run_one_sim(matrix: str,
         "-intraQSize","200000000",
         "-is-link-down", str(link_down),
         "-statistics-filename", stat_file,
+        "-seed", str(seed),   # <-- deterministic runs
     ]
 
     print("Executing command:")
@@ -309,6 +361,12 @@ def run_one_sim(matrix: str,
     env = os.environ.copy()
     for k, v in DCQCN_KNOBS.items():
         env[k] = str(v)
+
+    # Echo applied knobs & seed for traceability
+    print("Applied DCQCN_KNOBS:")
+    for k in sorted(DCQCN_KNOBS):
+        print(f"  {k}={DCQCN_KNOBS[k]}")
+    print(f"Applied seed: {seed}")
 
     with open(out_file, "w") as fout:
         proc = subprocess.run(cmd, stdout=fout, stderr=subprocess.STDOUT, env=env)
@@ -322,11 +380,13 @@ def run_one_sim(matrix: str,
 
     return out_file, stat_file
 
-# ---------- main ----------
+# ============================================================
+# CLI / Main
+# ============================================================
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Run simulator for ONE connection matrix and then plot + summarize (with optional DCQCN knob overrides via env)."
+        description="Run simulator for ONE connection matrix and then plot + summarize (deterministic, with optional DCQCN knob overrides via env)."
     )
     ap.add_argument("--run-sim", metavar="MATRIX", required=True,
                     help="Connection matrix filename OR path, e.g. one_one_4_200MB.cm")
@@ -341,6 +401,7 @@ def main():
     ap.add_argument("--link-down", type=int, default=0)
     ap.add_argument("--use-jitter", type=int, default=0)
     ap.add_argument("--exp", type=int, default=1)
+    ap.add_argument("--seed", type=int, default=1, help="Deterministic RNG seed passed to the simulator.")
     args = ap.parse_args()
 
     out_file, stat_file = run_one_sim(
@@ -349,7 +410,8 @@ def main():
         drop_rate=args.drop_rate,
         link_down=args.link_down,
         use_jitter=args.use_jitter,
-        exp=args.exp
+        exp=args.exp,
+        seed=args.seed,
     )
 
     # Fairness plot
@@ -358,7 +420,7 @@ def main():
     title = f"Sending rates for {os.path.basename(plot_path).replace('fairness_','').replace('.png','')}"
     draw_fairness_plot(rates, plot_path, title)
 
-    # Flow table + CSV (includes FCT/Avg/Score)
+    # Flow table + CSV (includes FCT/Avg/Score) — now de-duplicated by (flow, seq)
     print_and_write_summary(args.trace_csv, args.paths_file)
 
 if __name__ == "__main__":
