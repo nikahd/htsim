@@ -212,6 +212,25 @@ void DCQCNSrc::doNextEvent() {
 
     _byte_counter += (_highest_sent - _old_highest_sent) * _mss;
     _old_highest_sent = _highest_sent;
+    
+    // ----- NEW: log true sender current rate (bytes actually sent / delta time) -----
+{
+    simtime_picosec now  = eventlist().now();
+    uint64_t cum_bytes    = _highest_sent * _mss;               // bytes ever sent
+    uint64_t delta_bytes  = cum_bytes - _sample_last_bytes;
+    simtime_picosec dt    = now - _sample_last_ts;
+
+    // sample roughly every ~1ms of sim time (tune as you like)
+    if (dt >= timeFromUs(1000.0)) {
+        double bps = (dt > 0) ? (double)delta_bytes * 1e12 / (double)dt : 0.0;
+        _statistics_outfile << "Flow " << _name
+                            << " time: " << timeAsUs(now)
+                            << " current_rate: " << (linkspeed_bps)bps
+                            << std::endl;
+        _sample_last_ts    = now;
+        _sample_last_bytes = cum_bytes;
+    }
+}
 
     if (_byte_counter >= _B) {
         _byte_counter = 0;

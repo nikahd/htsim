@@ -42,12 +42,12 @@ protected:
 
     // state
     linkspeed_bps   _link;
-    linkspeed_bps   _RC;      // current rate
-    linkspeed_bps   _RT;      // target rate
+    linkspeed_bps   _RC;      // current/pacing rate (what we actually pace at)
+    linkspeed_bps   _RT;      // target/aux rate used by the controller
     simtime_picosec _last_cc_update;
     simtime_picosec _last_alpha_update;
 
-    uint32_t        _T;            // epoch counter (t-timer)
+    uint32_t        _T;            // epoch counter (time-based)
     uint32_t        _BC;           // epoch counter (bytes-based)
     uint64_t        _byte_counter;
     uint64_t        _old_highest_sent;
@@ -59,6 +59,12 @@ protected:
 
     // diagnostics
     uint64_t        _cnps_received = 0;
+
+    // ---- NEW: sender-current-rate sampling (for plots) ----
+    // Cumulative bytes sent at last sample and timestamp of that sample.
+    // Used in doNextEvent() to log "current_rate:" as bytes/delta_t.
+    uint64_t        _sample_last_bytes = 0;
+    simtime_picosec _sample_last_ts    = 0;
 
 private:
     static bool     _env_applied;
