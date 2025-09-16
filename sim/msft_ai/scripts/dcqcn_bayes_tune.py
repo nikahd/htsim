@@ -622,6 +622,95 @@ def parse_trace_csv_fct_ecn(trace_csv):
         summary[fid] = {"pkts": unique_pkts, "ecn": ecn, "fct_us": fct_us}
     return summary
 
+def ecn_per_packet(csv_flow):
+    ecn = sum(d["ecn"] for d in csv_flow.values())
+    pkts = sum(d["pkts"] for d in csv_flow.values())
+    return (ecn / pkts) if pkts > 0 else 0.0
+
+# ---- (A) Tail means and Jain -------------------------------------------------
+
+def tail_mean_rates_from_sending(stat_path, tail_frac=0.2):
+    sr = parse_sending_rates(stat_path)  # {flow: [(t_us, bps), ...]}
+    tail_means = {}
+    for fid, arr in sr.items():
+        if not arr:
+            tail_means[fid] = 0.0
+            continue
+        arr = sorted(arr)
+        t_end = arr[-1][0]
+        t_cut = t_end * (1.0 - tail_frac)
+        xs = [bps for (t, bps) in arr if t >= t_cut]
+        tail_means[fid] = (sum(xs)/len(xs))/1e6 if xs else 0.0  # Mbps
+    return tail_means
+
+def jain_index(values):
+    vals = [v for v in values if v > 0]
+    if not vals:
+        return 0.0
+    s = sum(vals)
+    s2 = sum(v*v for v in vals)
+    return (s*s) / (len(vals) * s2)
+
+# ---- (C) Convergence time t* -------------------------------------------------
+
+def convergence_time_us(stat_path, eps_frac=0.05, window_us=2000):
+    """
+    First time t* such that for every flow, every sample in [t*, t*+window_us]
+    stays within eps_frac of that flow's tail mean (computed over last 20%).
+    Uses sender TARGET samples. If you log sender CURRENT, swap parser here.
+    """
+    sr = parse_sending_rates(stat_path)  # {fid: [(t_us, bps), ...]}
+    if not sr:
+        return 0.0
+    tail = tail_mean_rates_from_sending(stat_path, tail_frac=0.2)  # Mbps
+    tail_bps = {f: m*1e6 for f, m in tail.items()}
+    all_ts = sorted(set(t for arr in sr.values() for (t, _) in arr))
+    if not all_ts:
+        return 0.0
+    eps = {f: max(1.0, tail_bps.get(f, 0.0) * eps_frac) for f in tail_bps}
+
+    # index per flow for O(N) scan
+    idx = {f: 0 for f in sr}
+    arrs = {f: sorted(sr[f]) for f in sr}
+
+    def ok_window(t0):
+        t1 = t0 + window_us
+        for f, arr in arrs.items():
+            # advance to first sample >= t0
+            i = idx[f]
+            while i < len(arr) and arr[i][0] < t0:
+                i += 1
+            j = i
+            while j < len(arr) and arr[j][0] <= t1:
+                t, bps = arr[j]
+                if abs(bps - tail_bps.get(f, 0.0)) > eps.get(f, 1.0):
+                    return False
+                j += 1
+            if j == i:  # no samples for this flow in window
+                return False
+        return True
+
+    for t in all_ts:
+        if ok_window(t):
+            return t
+    return all_ts[-1]
+
+# ---- (D) Composite score -----------------------------------------------------
+
+def composite_score(avg_ms, p95_ms, jain, ecn_ppkt, tconv_us, sim_end_us,
+                    w_avg=1.0, w_p95=0.5):
+    denom = w_avg*avg_ms + w_p95*p95_ms
+    if denom <= 0:
+        return 0.0
+    pconv = 1.0 + (tconv_us / max(sim_end_us, 1.0))
+    s = (1000.0 / denom) * jain * (1.0 / (1.0 + ecn_ppkt)) / pconv
+    # soft guard-rail on fairness
+    if jain < 0.90:
+        s *= 0.1
+    return s
+
+# -----------------------------------------------------------------------------
+
 def print_and_write_summary(trace_csv, paths_file, idle_frac, goodput_bins, bin_us, trial_csv_path):
     csv_flow   = parse_trace_csv_fct_ecn(trace_csv)
     flow_ids   = sorted(csv_flow.keys())
@@ -805,6 +894,9 @@ def run_sim_with_knobs(matrix,
 def evaluate(matrix, trial_knobs, args, tag, trial_seed):
     """
     Returns (score, avg_fct_ms, out_file, stat_file, fairness_png, goodput_png, trial_csv).
+
+    score: composite score (S) as defined in our WAN objective.
+    avg_fct_ms: average FCT in ms (same value your summary prints).
     """
     print(f"\n=== Trial {tag} knobs ===")
     for k in sorted(trial_knobs.keys()):
@@ -824,7 +916,9 @@ def evaluate(matrix, trial_knobs, args, tag, trial_seed):
     draw_fairness_plot(rates, fairness_png, title)
 
     # Goodput + sim duration + per-link util estimate
-    gp_bins, sim_dur_us, flow_total_bytes = build_goodput_bins(args.trace_csv, bin_us=args.goodput_bin_us)
+    gp_bins, sim_dur_us, flow_total_bytes = build_goodput_bins(
+        args.trace_csv, bin_us=args.goodput_bin_us
+    )
     goodput_png = goodput_plot_path_for_trial(stat_file, tag)
     plot_goodput_bins(gp_bins, goodput_png, args.goodput_bin_us)
 
@@ -849,9 +943,49 @@ def evaluate(matrix, trial_knobs, args, tag, trial_seed):
                        flow_total_bytes, sim_dur_us,
                        out_csv=f"link_util_est_{tag}.csv")
 
-    # Flow summary CSV + score
+    # -------------------------------------------------------------
+    # NEW: Composite-score metrics (Avg, P95, Jain, ECN/packet, t*)
+    # -------------------------------------------------------------
+    # FCT & ECN from packet trace
+    csv_flow = parse_trace_csv_fct_ecn(args.trace_csv)  # {fid: {pkts, ecn, fct_us}}
+    fcts_us = [d["fct_us"] for d in csv_flow.values() if d.get("fct_us") is not None]
+    if fcts_us:
+        fcts_us_sorted = sorted(fcts_us)
+        avg_fct_ms_calc = (sum(fcts_us_sorted) / len(fcts_us_sorted)) / 1000.0
+        p95_idx = int(0.95 * (len(fcts_us_sorted) - 1))
+        p95_fct_ms = fcts_us_sorted[p95_idx] / 1000.0
+    else:
+        avg_fct_ms_calc = 0.0
+        p95_fct_ms = 0.0
+
+    # Tail means & Jain fairness from sender TARGET by default.
+    # (If you prefer CURRENT or goodput, swap the source function.)
+    tail_means_mbps = tail_mean_rates_from_sending(stat_file, tail_frac=0.2)  # {fid: Mbps}
+    j_tail = jain_index(tail_means_mbps.values())
+
+    # ECN per packet
+    def _ecn_per_packet(flow_map):
+        pkts = sum(d.get("pkts", 0) for d in flow_map.values())
+        ecn  = sum(d.get("ecn", 0)  for d in flow_map.values())
+        return (ecn / pkts) if pkts > 0 else 0.0
+    ecn_ppkt = _ecn_per_packet(csv_flow)
+
+    # Convergence time t* (use sender TARGET samples)
+    eps = getattr(args, "conv_eps", 0.05)
+    win_us = getattr(args, "conv_window_us", 2000)
+    tconv_us = convergence_time_us(stat_file, eps_frac=eps, window_us=win_us)
+
+    # Composite score
+    w_avg = getattr(args, "w_avg", 1.0)
+    w_p95 = getattr(args, "w_p95", 0.5)
+    S = composite_score(avg_fct_ms_calc, p95_fct_ms, j_tail, ecn_ppkt, tconv_us, sim_dur_us,
+                        w_avg=w_avg, w_p95=w_p95)
+
+    # -------------------------------------------------------------
+    # Keep generating the legacy summary CSV (and legacy score)
+    # -------------------------------------------------------------
     trial_csv = summary_csv_for_trial(stat_file, tag)
-    score, avg_fct_ms = print_and_write_summary(
+    legacy_score, legacy_avg_ms = print_and_write_summary(
         args.trace_csv,
         args.paths_file or parse_paths_file_name_from_log(),
         idle_frac,
@@ -860,43 +994,74 @@ def evaluate(matrix, trial_knobs, args, tag, trial_seed):
         trial_csv_path=trial_csv
     )
 
-    print(f"[{tag}] score={score:.3f} | avg_fct_ms={avg_fct_ms:.3f}")
-    return score, avg_fct_ms, out_file, stat_file, fairness_png, goodput_png, trial_csv
+    # Friendly metrics line
+    classic = (1000.0 / avg_fct_ms_calc) if avg_fct_ms_calc > 0 else 0.0
+    print(f"[metrics] avg_ms={avg_fct_ms_calc:.3f} p95_ms={p95_fct_ms:.3f} "
+          f"jain={j_tail:.3f} ecn/packet={ecn_ppkt:.3f} "
+          f"t*={tconv_us:.0f}us S={S:.3f} (legacy={classic:.3f})")
+
+    # What we return/optimize: the composite score S
+    print(f"[{tag}] score={S:.3f} | avg_fct_ms={avg_fct_ms_calc:.3f}")
+    return S, avg_fct_ms_calc, out_file, stat_file, fairness_png, goodput_png, trial_csv
 
 
 # ============================================================
 # Search strategies
 # ============================================================
 
-def rand_point(space):
+def rand_point(space, rng=None):
+    """Uniform (or log-like) random draw per dimension with reproducibility."""
+    rng = rng or random
     trial = {}
-    for k, rng in space.items():
-        lo, hi = rng
+    for k, (lo, hi) in space.items():
         if isinstance(lo, int) and isinstance(hi, int):
-            trial[k] = random.randint(int(lo), int(hi))
+            trial[k] = rng.randint(int(lo), int(hi))
         else:
-            v = random.random() * (float(hi) - float(lo)) + float(lo)
+            v = rng.random() * (float(hi) - float(lo)) + float(lo)
             trial[k] = float(v)
     return trial
 
-def get_optimizer(space):
+def get_optimizer(space, seed=42, force="auto", n_initial_points=8):
+    """
+    Returns ("skopt", opt, names) or ("random", None, names).
+    - force="auto" (default): try skopt, else random
+      force="skopt": require skopt (raise if missing)
+      force="random": use random
+    - n_initial_points: random burn-in for skopt (helps noisy scores)
+    """
+    if force == "random":
+        print("Using random search (forced).")
+        return ("random", None, list(space.keys()))
+
     try:
         from skopt import Optimizer
         from skopt.space import Integer, Real
-        dims = []
-        names = []
-        for k, (lo, hi) in space.items():
-            names.append(k)
-            if isinstance(lo, int) and isinstance(hi, int):
-                dims.append(Integer(lo, hi, name=k))
-            else:
-                prior = "log-uniform" if (float(lo) > 0 and float(hi) > 0) else "uniform"
-                dims.append(Real(float(lo), float(hi), prior=prior, name=k))
-        opt = Optimizer(dimensions=dims, base_estimator="GP", acq_func="EI")
-        return ("skopt", opt, names)
     except Exception:
+        if force == "skopt":
+            raise
         print("scikit-optimize not found; falling back to random search.")
         return ("random", None, list(space.keys()))
+
+    # Build dimensions
+    dims, names = [], []
+    for k, (lo, hi) in space.items():
+        names.append(k)
+        if isinstance(lo, int) and isinstance(hi, int):
+            dims.append(Integer(int(lo), int(hi), name=k))
+        else:
+            prior = "log-uniform" if (float(lo) > 0 and float(hi) > 0) else "uniform"
+            dims.append(Real(float(lo), float(hi), prior=prior, name=k))
+
+    # GP-based BO with EI, seeded and with a random design phase
+    opt = Optimizer(
+        dimensions=dims,
+        base_estimator="GP",
+        acq_func="EI",
+        acq_optimizer="auto",
+        random_state=seed,
+        n_initial_points=max(1, int(n_initial_points))
+    )
+    return ("skopt", opt, names)
 
 
 # ============================================================
@@ -931,6 +1096,7 @@ def parse_inline_knobs(kv_list):
                 out[k] = v
     return out
 
+
 def main():
     ap = argparse.ArgumentParser(
         description="DCQCN search or fixed evaluation with enhanced plots/metrics."
@@ -954,26 +1120,49 @@ def main():
     ap.add_argument("--goodput-bin-us", type=int, default=1000,
                     help="Bin size for goodput curve (us).")
 
-    # Search settings
+    # ---- Composite score tuning (used by evaluate) ----
+    ap.add_argument("--w-avg", type=float, default=1.0, dest="w_avg",
+                    help="Weight for Avg FCT (ms) in composite score denominator.")
+    ap.add_argument("--w-p95", type=float, default=0.5, dest="w_p95",
+                    help="Weight for P95 FCT (ms) in composite score denominator.")
+    ap.add_argument("--conv-eps", type=float, default=0.05, dest="conv_eps",
+                    help="Convergence epsilon fraction (e.g., 0.05 = ±5%).")
+    ap.add_argument("--conv-window-us", type=int, default=2000, dest="conv_window_us",
+                    help="Window length (us) for convergence test.")
+    ap.add_argument("--fairness-tail-frac", type=float, default=0.20, dest="fairness_tail_frac",
+                    help="Tail fraction of sim for fairness/Jain (0.2 = last 20%).")
+
+    # ---- Search settings ----
     ap.add_argument("--max-evals", type=int, default=10, help="Number of trials in search mode.")
     ap.add_argument("--seed", type=int, default=42, help="Base RNG seed; per-trial seed = seed + trial_index.")
+    ap.add_argument("--force-search", choices=["auto","random","skopt"], default="auto",
+                    help="Force search backend: auto tries skopt then falls back; random forces random; skopt forces skopt.")
+    ap.add_argument("--n-initial-points", type=int, default=8,
+                    help="Random design points for skopt before BO (helps noisy objectives).")
 
-    # Fixed-mode knobs:
+    # ---- Fixed-mode knobs ----
     ap.add_argument("--knobs-json", default=None,
                     help="Path to JSON file with knobs (keys as env var names).")
     ap.add_argument("--knob", action="append", default=None,
                     help="Inline knob override K=V; can be repeated.")
+    ap.add_argument("--default-knobs", default="/htsim/scripts/msft_ai_dcqcn_knobs_matrices/tuned_knobs.json",
+                    help="Fallback knobs JSON used in --mode fixed when --knobs-json not provided.")
 
     args = ap.parse_args()
 
+    # Thread RNG through everything
     random.seed(args.seed)
+
+    # Make the fairness tail setting visible to helpers (if needed)
+    # If your tail_mean function accepts a param, pass args.fairness_tail_frac there (we do in evaluate).
 
     # -----------------------------------------
     # FIXED MODE
     # -----------------------------------------
     if args.mode == "fixed":
         fixed = {}
-        # load from JSON if provided
+
+        # 1) knobs from explicit JSON
         if args.knobs_json:
             try:
                 with open(args.knobs_json, "r") as f:
@@ -985,8 +1174,8 @@ def main():
             except Exception as e:
                 print(f"WARN: failed to read knobs-json: {e}", file=sys.stderr)
         else:
-            # Auto-discover default knobs at your new path
-            auto_knobs = "/htsim/scripts/msft_ai_dcqcn_knobs_matrices/tuned_knobs.json"
+            # 2) fallback to default knobs path
+            auto_knobs = args.default_knobs
             if os.path.exists(auto_knobs):
                 try:
                     with open(auto_knobs, "r") as f:
@@ -994,10 +1183,14 @@ def main():
                         if isinstance(data, dict):
                             print(f"Using default knobs from: {auto_knobs}")
                             fixed.update(data)
+                        else:
+                            print(f"WARN: default knobs at {auto_knobs} is not a dict", file=sys.stderr)
                 except Exception as e:
                     print(f"WARN: failed to read default knobs {auto_knobs}: {e}", file=sys.stderr)
+            else:
+                print(f"WARN: default knobs file not found: {auto_knobs}", file=sys.stderr)
 
-        # inline overrides win last
+        # 3) inline overrides win last
         fixed.update(parse_inline_knobs(args.knob))
 
         tag = "fixed"
@@ -1015,7 +1208,12 @@ def main():
     # -----------------------------------------
     # SEARCH MODE
     # -----------------------------------------
-    search_kind, opt, names = get_optimizer(DEFAULT_KNOBS_SPACE)
+    search_kind, opt, names = get_optimizer(
+        DEFAULT_KNOBS_SPACE,
+        seed=args.seed,
+        force=args.force_search,
+        n_initial_points=args.n_initial_points
+    )
 
     best_score   = -1.0
     best_summary = None  # (trial_idx, knobs, score, avg_fct_ms, stat_file, fairness_png, goodput_png, trial_csv)
@@ -1027,7 +1225,7 @@ def main():
             x = opt.ask()
             trial_knobs = {names[j]: x[j] for j in range(len(names))}
         else:
-            trial_knobs = rand_point(DEFAULT_KNOBS_SPACE)
+            trial_knobs = rand_point(DEFAULT_KNOBS_SPACE, rng=random)
 
         # Coerce types according to space definition
         coerced = {}
@@ -1067,3 +1265,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
+usage: dcqcn_bayes_tune.py [-h] [--mode {search,fixed}] --run-sim MATRIX [--binary BINARY] [--folder FOLDER] [--trace-csv TRACE_CSV] [--paths-file PATHS_FILE] [--drop-rate DROP_RATE] [--link-down LINK_DOWN] [--use-jitter USE_JITTER] [--exp EXP] [--goodput-bin-us GOODPUT_BIN_US]
+                           [--w-avg W_AVG] [--w-p95 W_P95] [--conv-eps CONV_EPS] [--conv-window-us CONV_WINDOW_US] [--fairness-tail-frac FAIRNESS_TAIL_FRAC] [--max-evals MAX_EVALS] [--seed SEED] [--force-search {auto,random,skopt}] [--n-initial-points N_INITIAL_POINTS]
+                           [--knobs-json KNOBS_JSON] [--knob KNOB] [--default-knobs DEFAULT_KNOBS]
+"""
+
