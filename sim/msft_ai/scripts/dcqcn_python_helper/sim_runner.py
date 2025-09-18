@@ -1,11 +1,11 @@
-# dcqcn_python_helper/simwrap.py
+# dcqcn_python_helper/sim_runner.py
 import os
 import sys
 import subprocess
 from pathlib import Path
 
 from .constants import DCQCN_BASE_KNOBS
-from .paths import find_matrix_path
+from .paths import find_matrix_path, base_noext
 
 def run_sim_with_knobs(matrix,
                        knobs,
@@ -17,26 +17,28 @@ def run_sim_with_knobs(matrix,
                        exp=1,
                        seed=1):
     """
-    One simulator run for a connection matrix with explicit knobs.
-    Cleans stale CSVs, passes -seed, returns (out_file, stat_file).
+    Run ONE simulator job for a given connection matrix.
+    Returns (out_file, stat_file).
     """
     os.makedirs(folder_name, exist_ok=True)
 
-    # Clean analysis CSVs to avoid stale reads
+    # Clean CSVs so analysis never reads leftovers between runs
     for f in ["trace_packets.csv", "cnp_events.csv", "fabric_breadcrumbs.csv", "queue_samples.csv"]:
-        try: os.remove(f)
-        except FileNotFoundError: pass
+        try:
+            os.remove(f)
+        except FileNotFoundError:
+            pass
 
     conn_matrix = find_matrix_path(matrix)
     if not Path(conn_matrix).exists():
         print(f"ERROR: matrix file not found: {conn_matrix}", file=sys.stderr)
         sys.exit(1)
 
-    base_noext  = os.path.splitext(os.path.basename(conn_matrix))[0]
-    suffix      = f"_linkdown{link_down}_droprate{drop_rate}_usejitter{use_jitter}_exp{exp}"
+    base = base_noext(conn_matrix)
+    suffix = f"_linkdown{link_down}_droprate{drop_rate}_usejitter{use_jitter}_exp{exp}"
 
-    out_file  = os.path.join(folder_name, f"output_{base_noext}{suffix}.txt")
-    stat_file = os.path.join(folder_name, f"statistics_{base_noext}{suffix}.txt")
+    out_file  = os.path.join(folder_name, f"output_{base}{suffix}.txt")
+    stat_file = os.path.join(folder_name, f"statistics_{base}{suffix}.txt")
 
     cmd = [
         binary_path,
@@ -55,11 +57,10 @@ def run_sim_with_knobs(matrix,
         "-seed", str(seed),
     ]
 
+    # Compose env with base + per-trial knobs
     env = os.environ.copy()
-    # Base first…
     for k, v in DCQCN_BASE_KNOBS.items():
         env[k] = str(v)
-    # …trial overrides win last
     for k, v in knobs.items():
         env[str(k)] = str(v)
 

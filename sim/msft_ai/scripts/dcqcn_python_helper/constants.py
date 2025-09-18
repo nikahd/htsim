@@ -1,4 +1,4 @@
-from pathlib import Path
+# dcqcn_python_helper/constants.py
 
 DCQCN_BASE_KNOBS = {
     "DCQCN_CNP_INTERVAL_US": 173,
@@ -14,21 +14,17 @@ DCQCN_BASE_KNOBS = {
     "DCQCN_HI_CAP_DIV": 668,
 }
 
+# Only used if neither env nor knobs provide them
 DCQCN_DEFAULTS = {
     "DCQCN_EPOCH_US": 15000,
     "DCQCN_HI_COOLDOWN": 2,
 }
 
+# SEARCH SPACE — only the 5 knobs you requested
 DEFAULT_KNOBS_SPACE = {
-    "DCQCN_CNP_INTERVAL_US": (10, 200),
-    "DCQCN_EPOCH_US":        (2000, 30000),
-    "DCQCN_ALPHA_INIT":      (0.05, 1.0),
-    "DCQCN_G":               (0.001, 0.1),
-    "DCQCN_B_BYTES":         (8*1024*1024, 256*1024*1024),
-    "DCQCN_F_EPOCHS":        (2, 64),
-    "DCQCN_MD_CAP":          (0.05, 0.8),
-    "DCQCN_FLOOR_LINE_FRAC": (0.05, 0.9),
-    "DCQCN_FLOOR_RT_FRAC":   (0.5, 0.95),
-    "DCQCN_HI_COOLDOWN":     (0, 8),
-    "DCQCN_HI_CAP_DIV":      (64, 1024),
+    "DCQCN_ALPHA_INIT": (0.05, 1.0),                    # float
+    "DCQCN_B_BYTES":    (8*1024*1024, 256*1024*1024),   # int
+    "DCQCN_EPOCH_US":   (2000, 30000),                  # int
+    "DCQCN_F_EPOCHS":   (2, 64),                        # int
+    "DCQCN_G":          (0.001, 0.1),                   # float
 }
