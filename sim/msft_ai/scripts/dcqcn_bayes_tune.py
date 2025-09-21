@@ -122,23 +122,36 @@ def evaluate_one_matrix(matrix, trial_knobs, args, tag, run_seed):
         use_jitter=args.use_jitter, exp=args.exp, seed=run_seed
     )
 
-    # 2) Plots: sender TARGET, receiver goodput, sender CURRENT (if available/derived)
+    # 2) Parse receiver trace FIRST to learn sim_dur_us (align x-axes across plots)
+    gp_bins, sim_dur_us, flow_total_bytes = build_goodput_bins(
+        args.trace_csv, bin_us=args.goodput_bin_us
+    )
+
+    # Sender TARGET plot (optionally capped to sim_dur_us)
     fairness_png = plot_path_for_trial(stat_file, tag)
     rates = parse_sending_rates(stat_file)
-    draw_fairness_plot(rates, fairness_png, f"{tag}: {os.path.basename(fairness_png)}")
+    draw_fairness_plot(
+        rates, fairness_png, f"{tag}: {os.path.basename(fairness_png)}",
+        sim_dur_us=sim_dur_us
+    )
 
-    gp_bins, sim_dur_us, flow_total_bytes = build_goodput_bins(args.trace_csv, bin_us=args.goodput_bin_us)
+    # Receiver goodput (same x-axis)
     goodput_png = goodput_plot_path_for_trial(stat_file, tag)
-    plot_goodput_bins(gp_bins, goodput_png, args.goodput_bin_us)
+    plot_goodput_bins(gp_bins, goodput_png, args.goodput_bin_us, sim_dur_us=sim_dur_us)
 
+    # Idle windows from CNP cooldown reconstruction
     idle_frac = compute_idle_fraction("cnp_events.csv", sim_dur_us, trial_knobs)
     idle_w    = compute_idle_windows("cnp_events.csv", sim_dur_us, trial_knobs)
 
+    # Sender CURRENT (native if logged; else mask TARGET during idle windows)
     current_rates = parse_current_rates(stat_file)
     if not current_rates:
         current_rates = build_effective_sender_rate_from_idle(rates, idle_w)
     sender_cur_png = goodput_plot_path_for_trial(stat_file, f"{tag}_sender_current")
-    draw_rate_series(current_rates, sender_cur_png, f"{tag}: Sender CURRENT rate", "Current Rate (Mbps)")
+    draw_rate_series(
+        current_rates, sender_cur_png, f"{tag}: Sender CURRENT rate",
+        "Current Rate (Mbps)", sim_dur_us=sim_dur_us
+    )
 
     # Optional queue plot
     maybe_plot_queues(stat_file, "queue_samples.csv", tag)
@@ -249,6 +262,7 @@ def aggregate_scores(per_matrix_results, mode="geomean", weights=None):
 def evaluate_across_matrices(matrices, trial_knobs, args, tag, trial_index):
     per_matrix_results = []
     for m_idx, mat in enumerate(matrices):
+        # Respect the selected seed policy
         run_seed = compute_run_seed(args.seed, trial_index, m_idx, args.seed_policy)
         res = evaluate_one_matrix(
             mat, trial_knobs, args,
@@ -307,7 +321,7 @@ def main():
     ap.add_argument("--max-evals", type=int, default=10)
     ap.add_argument("--seed", type=int, default=42)
 
-    # NEW: seed policy
+    # Seed policy
     ap.add_argument("--seed-policy",
                     choices=["fixed","per-matrix","per-trial","per-trial-and-matrix"],
                     default="per-matrix",
@@ -409,7 +423,7 @@ def main():
             coerced[k] = int(round(v)) if isinstance(lo, int) and isinstance(hi, int) else float(v)
         trial_knobs = coerced
 
-        # IMPORTANT: pass the trial index separately so seed policy can handle it
+        # IMPORTANT: pass the trial index so seed policy can handle it
         score, avg_fct_ms, per_matrix = evaluate_across_matrices(
             matrices, trial_knobs, args, tag, trial_index=i
         )
@@ -453,6 +467,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 """

@@ -109,7 +109,7 @@ def _color_for(flow_id, palette):
         idx = hash(str(flow_id)) % 1000
     return palette[idx % len(palette)]
 
-def draw_rate_series(series_dict, out_png, title, ylabel):
+def draw_rate_series(series_dict, out_png, title, ylabel, sim_dur_us=None):
     if not series_dict:
         print(f"No samples to plot: {title}")
         return
@@ -124,13 +124,15 @@ def draw_rate_series(series_dict, out_png, title, ylabel):
     plt.title(title)
     plt.xlabel("Time (us)")
     plt.ylabel(ylabel)
+    if sim_dur_us is not None and sim_dur_us > 0:
+        plt.xlim(0, sim_dur_us)
     plt.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0)
     plt.tight_layout()
     plt.savefig(out_png)
     print(f"Plotting {out_png}")
 
-def draw_fairness_plot(sending_rate_dict, out_png, title):
-    draw_rate_series(sending_rate_dict, out_png, title, "Sending Rate (Mbps)")
+def draw_fairness_plot(sending_rate_dict, out_png, title, sim_dur_us=None):
+    draw_rate_series(sending_rate_dict, out_png, title, "Sending Rate (Mbps)", sim_dur_us=sim_dur_us)
 
 # ---------- Goodput (receiver-side) ----------
 def _row_payload_bytes(row):
@@ -171,7 +173,7 @@ def build_goodput_bins(trace_csv, bin_us=1000):
         return {}, 0.0, {}
     return gp_bins, last_ts, flow_total_bytes
 
-def plot_goodput_bins(gp_bins, out_png, bin_us):
+def plot_goodput_bins(gp_bins, out_png, bin_us, sim_dur_us=None):
     if not gp_bins:
         print("No goodput data to plot.")
         return
@@ -188,6 +190,8 @@ def plot_goodput_bins(gp_bins, out_png, bin_us):
     plt.xlabel("Time (us)")
     plt.ylabel(f"Goodput (Mbps)  [bin={bin_us}us]")
     plt.title("Per-flow Goodput (Receiver)")
+    if sim_dur_us is not None and sim_dur_us > 0:
+        plt.xlim(0, sim_dur_us)
     plt.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0)
     plt.tight_layout()
     plt.savefig(out_png)
@@ -271,7 +275,7 @@ def compute_idle_windows(cnp_csv, sim_dur_us, trial_knobs):
                 s = t; e = min(sim_dur_us, t + cooldown_us)
                 if s < e: tmp[fid].append((s, e))
             for fid, ivals in tmp.items():
-                if not ivals: 
+                if not ivals:
                     continue
                 ivals.sort()
                 merged = []
@@ -312,7 +316,7 @@ def maybe_plot_queues(stat_path, queue_csv, tag, topk=5):
         return None
     by_link = defaultdict(list)  # link -> [(t, qbytes)]
     try:
-        with open(queue_csv, newline="") as f:
+        with open(queue_csv, newline="}") as f:
             rdr = csv.DictReader(f)
             if not rdr.fieldnames:
                 return None

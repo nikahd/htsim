@@ -6,18 +6,13 @@
 #include <stdlib.h>   // getenv
 #include <algorithm>
 #include <iostream>
+#include <assert.h>
 
 #include "queue.h"
 #include "switch.h"
 #include "trigger.h"
 
-
-// IMPORTANT: include the header that defines CNPPacket / CNP type.
-// In many trees this lives in one of these; adjust if your project uses a different name:
-//   - "roce_packets.h"
-//   - "roce_packet.h"
-//   - "roce.h" (sometimes contains all RoCE packet types)
-// If you still get “unknown type name ‘CNPPacket’”, search your repo for “class CNPPacket”.
+// RoCE packet types (adjust includes if your tree differs)
 #include "roce.h"
 #include "cnppacket.h"
 
@@ -41,13 +36,13 @@ inline bool get_env_ll(const char* k, long long& out) {
 //  DCQCN SOURCE/SINK STATICS (defaults)
 ////////////////////////////////////////////////////////////////
 
-simtime_picosec DCQCNSink::_cnp_interval      = timeFromUs(50.0);       // conservative pacing
-simtime_picosec DCQCNSrc::_cc_update_period   = timeFromUs(15000.0);    // WAN epoch (~15ms)
+simtime_picosec DCQCNSink::_cnp_interval      = timeFromUs(50.0);          // conservative pacing
+simtime_picosec DCQCNSrc::_cc_update_period   = timeFromUs(15000.0);       // WAN epoch (~15ms)
 
-double          DCQCNSrc::_g                  = 1.0/256;                // α EWMA decay
+double          DCQCNSrc::_g                  = 1.0/256;                   // α EWMA decay
 uint64_t        DCQCNSrc::_B                  = 64ULL * 1024ULL * 1024ULL; // bytes per BC epoch
-uint32_t        DCQCNSrc::_F                  = 20;                     // epochs before HI
-linkspeed_bps   DCQCNSrc::_RAI                = 0;                      // set per instance
+uint32_t        DCQCNSrc::_F                  = 20;                         // epochs before HI
+linkspeed_bps   DCQCNSrc::_RAI                = 0;                          // set per instance
 linkspeed_bps   DCQCNSrc::_RHAI               = 0;
 
 // env-tunable extras
@@ -127,6 +122,10 @@ DCQCNSrc::DCQCNSrc(RoceLogger* logger,
     _old_highest_sent = 0;
 
     _hi_cooldown_epochs = 0;
+
+    // init true-rate sampling state (per flow)
+    _sample_last_ts    = 0;
+    _sample_last_bytes = 0;
 }
 
 void DCQCNSrc::processCNP(const Packet& /*cnp*/) {
@@ -195,14 +194,20 @@ void DCQCNSrc::increaseRate() {
 void DCQCNSrc::doNextEvent() {
     bool reschedule = false;
 
-    // opportunistic sampling
+    // opportunistic sampling (target vs current)
     if (rand() % 1000 < 5) {
         if (_state_send == PAUSED) {
-            _statistics_outfile << "Flow " << _name << " time: " << timeAsUs(eventlist().now())
-                                << " sending_rate: " << 0 << endl;
+            _statistics_outfile << "Flow " << _name
+                                << " time: " << timeAsUs(eventlist().now())
+                                << " sending_rate: " << 0
+                                << " current_rate: " << 0
+                                << endl;
         } else {
-            _statistics_outfile << "Flow " << _name << " time: " << timeAsUs(eventlist().now())
-                                << " sending_rate: " << _pacing_rate << endl;
+            _statistics_outfile << "Flow " << _name
+                                << " time: " << timeAsUs(eventlist().now())
+                                << " sending_rate: " << _pacing_rate
+                                << " current_rate: " << _pacing_rate
+                                << endl;
         }
     }
 
@@ -212,25 +217,25 @@ void DCQCNSrc::doNextEvent() {
 
     _byte_counter += (_highest_sent - _old_highest_sent) * _mss;
     _old_highest_sent = _highest_sent;
-    
-    // ----- NEW: log true sender current rate (bytes actually sent / delta time) -----
-{
-    simtime_picosec now  = eventlist().now();
-    uint64_t cum_bytes    = _highest_sent * _mss;               // bytes ever sent
-    uint64_t delta_bytes  = cum_bytes - _sample_last_bytes;
-    simtime_picosec dt    = now - _sample_last_ts;
 
-    // sample roughly every ~1ms of sim time (tune as you like)
-    if (dt >= timeFromUs(1000.0)) {
-        double bps = (dt > 0) ? (double)delta_bytes * 1e12 / (double)dt : 0.0;
-        _statistics_outfile << "Flow " << _name
-                            << " time: " << timeAsUs(now)
-                            << " current_rate: " << (linkspeed_bps)bps
-                            << std::endl;
-        _sample_last_ts    = now;
-        _sample_last_bytes = cum_bytes;
+    // ----- true sender current rate (bytes actually sent / elapsed time) -----
+    {
+        simtime_picosec now   = eventlist().now();
+        uint64_t cum_bytes    = _highest_sent * _mss;               // bytes ever sent
+        uint64_t delta_bytes  = cum_bytes - _sample_last_bytes;
+        simtime_picosec dt    = now - _sample_last_ts;
+
+        // sample roughly every ~1ms of sim time
+        if (_sample_last_ts == 0 || dt >= timeFromUs(1000.0)) {
+            double bps = (dt > 0) ? (double)delta_bytes * 1e12 / (double)dt : 0.0;
+            _statistics_outfile << "Flow " << _name
+                                << " time: " << timeAsUs(now)
+                                << " current_rate: " << (linkspeed_bps)bps
+                                << std::endl;
+            _sample_last_ts    = now;
+            _sample_last_bytes = cum_bytes;
+        }
     }
-}
 
     if (_byte_counter >= _B) {
         _byte_counter = 0;
@@ -325,24 +330,22 @@ void DCQCNSink::open_cnp_csv() {
 void DCQCNSink::receivePacket(Packet& pkt) {
     const bool ecn_marked = ((pkt.flags() & ECN_CE) != 0);
 
-    // NEW: extract seq for data packets (0 if not RocePacket)
+    // extract seq for data packets (0 if not RocePacket)
     uint64_t seq = 0;
     if (auto* rp = dynamic_cast<RocePacket*>(&pkt)) {
         seq = rp->seqno();
     }
 
-    // Log observation (avoid ambiguous get_id(); write a constant tag instead)
+    // Log observation
     if (pkt_csv.is_open()) {
-       auto sid = static_cast<const EventSource*>(this)->get_id();
-
-    pkt_csv << timeAsUs(eventlist().now()) << ","
-            << (_src ? _src->flow_id() : -1) << ","
-            << static_cast<long long>(seq) << ","
-            << (ecn_marked ? 1 : 0) << ","
-            << static_cast<long long>(_srcaddr) << ","
-            << static_cast<long long>(sid) << "\n";
+        auto sid = static_cast<const EventSource*>(this)->get_id();
+        pkt_csv << timeAsUs(eventlist().now()) << ","
+                << (_src ? _src->flow_id() : -1) << ","
+                << static_cast<long long>(seq) << ","
+                << (ecn_marked ? 1 : 0) << ","
+                << static_cast<long long>(_srcaddr) << ","
+                << static_cast<long long>(sid) << "\n";
     }
-
 
     RoceSink::receivePacket(pkt);
 
@@ -368,7 +371,6 @@ void DCQCNSink::doNextEvent() {
 
 void DCQCNSink::send_cnp() {
     // Build & send a CNP back to the source.
-    // (CNPPacket::newpkt is provided by the RoCE packet layer; include header at top)
     CNPPacket* cnp = CNPPacket::newpkt(_src->_flow, *_route, _cumulative_ack, _srcaddr);
     cnp->set_pathid(0);
     cnp->sendOn();
