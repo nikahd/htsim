@@ -121,6 +121,14 @@ def evaluate_one_matrix(matrix, trial_knobs, args, tag, run_seed):
         drop_rate=args.drop_rate, link_down=args.link_down,
         use_jitter=args.use_jitter, exp=args.exp, seed=run_seed
     )
+    
+    # cleanup giant raw sim output to save disk space ---
+    try:
+        if os.path.exists(out_file):
+            os.remove(out_file)
+            print(f"Deleted raw sim log: {out_file}")
+    except Exception as e:
+        print(f"WARNING: could not delete {out_file}: {e}")
 
     # 2) Parse receiver trace FIRST to learn sim_dur_us (align x-axes across plots)
     gp_bins, sim_dur_us, flow_total_bytes = build_goodput_bins(
@@ -482,5 +490,11 @@ python3 sim/msft_ai/scripts/dcqcn_bayes_tune.py \
   --max-evals 8
 
   --seed-policy per-trial-and-matrix
+-----------------------------------------------------------------------------------------------------
+
+python3 sim/msft_ai/scripts/dcqcn_bayes_tune.py \
+  --run-sim one_one_8_200MB.cm --run-sim one_one_8_400MB.cm --run-sim one_one_8_800MB.cm \
+  --seed 43 --seed-policy fixed --max-evals 20 \
+  --conv-eps 10.0 --conv-window-us 1 \
 
 """
